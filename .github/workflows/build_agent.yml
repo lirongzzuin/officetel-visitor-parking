@@ -87,9 +87,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: officetel_agent_installer
-          path: |
-            agent/dist/officetel_agent.exe
-            agent/officetel_agent_installer.zip
+          path: agent/installer_package/
           retention-days: 30
 
       - name: Create GitHub Release (태그 푸시 시)
