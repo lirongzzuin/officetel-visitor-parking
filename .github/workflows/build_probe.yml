@@ -1,0 +1,57 @@
+name: Build Cartan Probe EXE
+
+on:
+  push:
+    paths:
+      - 'agent/diagnostic/probe.py'
+      - '.github/workflows/build_probe.yml'
+  workflow_dispatch:   # 수동 실행 가능
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: agent/diagnostic
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Build EXE
+        run: |
+          pyinstaller `
+            --onefile `
+            --name cartan_probe `
+            --console `
+            --clean `
+            probe.py
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cartan_probe_windows
+          path: agent/diagnostic/dist/cartan_probe.exe
+          retention-days: 30
+
+      - name: Create Release (태그 푸시 시만)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agent/diagnostic/dist/cartan_probe.exe
+          name: "Cartan Probe ${{ github.ref_name }}"
+          body: |
+            ## Cartan800 DB 탐침 도구
+
+            ### 사용 방법
+            1. `cartan_probe.exe` 를 관리실 PC 바탕화면에 복사
+            2. 더블클릭으로 실행
+            3. 바탕화면에 `cartan_probe_YYYYMMDD_HHMMSS.txt` 생성됨
+            4. 해당 파일을 카카오톡 또는 이메일로 전송
