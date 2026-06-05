@@ -28,7 +28,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyinstaller requests
+          pip install pyinstaller requests pyodbc
 
       - name: Write version into source
         shell: pwsh

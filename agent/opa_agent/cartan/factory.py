@@ -5,6 +5,7 @@ import logging
 from .. import config as cfg
 from .base import CartanAdapter
 from .sqlite_adapter import CartanSqliteAdapter
+from .access_adapter import CartanAccessAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +22,11 @@ def get_adapter() -> CartanAdapter:
             raise ValueError("CARTAN_DB_PATH 환경변수가 필요합니다 (S1 시나리오)")
         return CartanSqliteAdapter(db_path, dry_run=dry_run)
 
-    # S2 (MS Access), S3 (Excel), S4 (네트워크 DB), S5 (UI 자동화)
-    # → 현장 조사 후 추가 구현
+    if scenario == "S2":
+        if not db_path:
+            raise ValueError("CARTAN_DB_PATH 환경변수가 필요합니다 (S2 시나리오)")
+        return CartanAccessAdapter(db_path, dry_run=dry_run)
+
     raise NotImplementedError(
-        f"시나리오 {scenario}는 아직 구현되지 않았습니다. "
-        f"현장 조사 결과를 바탕으로 추가 구현 예정입니다."
+        f"시나리오 {scenario}는 아직 구현되지 않았습니다."
     )
