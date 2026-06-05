@@ -74,11 +74,11 @@ jobs:
           Copy-Item "installer\config.json.example"         "$zip_dir\"
           Copy-Item "installer\README_관리소장님께.txt"      "$zip_dir\"
 
-          # NSSM 다운로드 (공식 소스)
-          $nssm_url = "https://nssm.cc/release/nssm-2.24.zip"
-          Invoke-WebRequest $nssm_url -OutFile nssm.zip
-          Expand-Archive nssm.zip -DestinationPath nssm_tmp -Force
-          Copy-Item "nssm_tmp\nssm-2.24\win64\nssm.exe" "$zip_dir\nssm.exe"
+          # NSSM 설치 (Chocolatey — nssm.cc 사이트 불안정 대비)
+          choco install nssm --no-progress -y | Out-Null
+          $nssm_src = (Get-Command nssm -ErrorAction SilentlyContinue)?.Source
+          if (-not $nssm_src) { $nssm_src = "C:\ProgramData\chocolatey\bin\nssm.exe" }
+          Copy-Item $nssm_src "$zip_dir\nssm.exe"
 
           Compress-Archive -Path "$zip_dir\*" -DestinationPath "officetel_agent_installer.zip" -Force
           echo "패키지 생성 완료"
