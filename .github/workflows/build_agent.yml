@@ -1,0 +1,113 @@
+name: Build & Release Agent EXE
+
+on:
+  push:
+    tags:
+      - 'v*'           # v1.0.0, v1.1.0 등 태그 푸시 시 자동 빌드
+  workflow_dispatch:   # 수동 실행 (Actions 탭에서)
+    inputs:
+      prerelease:
+        description: 'Pre-release?'
+        type: boolean
+        default: false
+
+jobs:
+  build-agent:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: agent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller requests
+
+      - name: Write version into source
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith("v")) { $tag = "v0.0.0-dev" }
+          $ver = $tag.TrimStart("v")
+          (Get-Content opa_agent\__init__.py) -replace '__version__ = ".*"', "__version__ = `"$ver`"" |
+            Set-Content opa_agent\__init__.py
+          echo "Version set to $ver"
+
+      - name: Build EXE
+        shell: pwsh
+        run: |
+          pyinstaller `
+            --onefile `
+            --name officetel_agent `
+            --console `
+            --clean `
+            opa_agent\__main__.py
+
+      - name: Verify EXE exists
+        shell: pwsh
+        run: |
+          $exe = "dist\officetel_agent.exe"
+          if (-not (Test-Path $exe)) { throw "EXE not found!" }
+          $size = (Get-Item $exe).Length / 1MB
+          echo "EXE size: $([math]::Round($size,1)) MB"
+
+      - name: Package installer zip
+        shell: pwsh
+        run: |
+          $zip_dir = "installer_package"
+          New-Item -ItemType Directory -Path $zip_dir -Force | Out-Null
+
+          Copy-Item "dist\officetel_agent.exe"              "$zip_dir\"
+          Copy-Item "installer\install.bat"                 "$zip_dir\"
+          Copy-Item "installer\uninstall.bat"               "$zip_dir\"
+          Copy-Item "installer\config.json.example"         "$zip_dir\"
+          Copy-Item "installer\README_관리소장님께.txt"      "$zip_dir\"
+
+          # NSSM 다운로드 (공식 소스)
+          $nssm_url = "https://nssm.cc/release/nssm-2.24.zip"
+          Invoke-WebRequest $nssm_url -OutFile nssm.zip
+          Expand-Archive nssm.zip -DestinationPath nssm_tmp -Force
+          Copy-Item "nssm_tmp\nssm-2.24\win64\nssm.exe" "$zip_dir\nssm.exe"
+
+          Compress-Archive -Path "$zip_dir\*" -DestinationPath "officetel_agent_installer.zip" -Force
+          echo "패키지 생성 완료"
+
+      - name: Upload artifact (임시 보관)
+        uses: actions/upload-artifact@v4
+        with:
+          name: officetel_agent_installer
+          path: |
+            agent/dist/officetel_agent.exe
+            agent/officetel_agent_installer.zip
+          retention-days: 30
+
+      - name: Create GitHub Release (태그 푸시 시)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "에이전트 ${{ github.ref_name }}"
+          prerelease: ${{ inputs.prerelease || false }}
+          body: |
+            ## OO오피스텔 주차 관리 에이전트 ${{ github.ref_name }}
+
+            ### 설치 방법
+            1. `officetel_agent_installer.zip` 다운로드 후 압축 해제
+            2. `config.json.example` → `config.json` 으로 복사 후 값 설정
+            3. `install.bat` 을 관리자 권한으로 실행
+
+            ### 자동 업데이트
+            - 에이전트가 1시간마다 이 페이지를 확인하고 자동 업데이트됩니다.
+            - 관리실 PC에 별도 작업 불필요.
+
+            ### 변경 사항
+            <!-- 릴리즈 노트 여기에 -->
+          files: |
+            agent/dist/officetel_agent.exe
+            agent/officetel_agent_installer.zip

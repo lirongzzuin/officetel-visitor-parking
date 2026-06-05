@@ -1,0 +1,19 @@
+{
+  "CLOUD_API_BASE":       "https://your-app.vercel.app",
+  "AGENT_TOKEN":          "여기에_관리자가_발급한_토큰_입력",
+  "GITHUB_REPO":          "lirongzzuin/officetel-visitor-parking",
+
+  "CARTAN_SCENARIO":      "S1",
+  "CARTAN_DRY_RUN":       "true",
+  "CARTAN_DB_PATH":       "C:\\ProgramData\\TantanCore\\parking.db",
+  "CARTAN_VISITOR_TABLE": "Visitors",
+  "CARTAN_PLATE_COL":     "PlateNo",
+  "CARTAN_UNIT_COL":      "UnitNo",
+  "CARTAN_VALID_FROM":    "ValidFrom",
+  "CARTAN_VALID_UNTIL":   "ValidUntil",
+
+  "CLOUD_POLL_SEC":       "60",
+  "HEARTBEAT_SEC":        "60",
+  "UPDATE_CHECK_SEC":     "3600",
+  "LOG_LEVEL":            "INFO"
+}
