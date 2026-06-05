@@ -286,13 +286,31 @@ def section_install_dirs(reg_paths: list[str]) -> list[Path]:
             except:
                 pass
 
+    processed: set[Path] = set()
+
+    def maybe_process(d: Path) -> None:
+        try:
+            resolved = d.resolve()
+        except:
+            resolved = d
+        if resolved in processed or not d.is_dir():
+            return
+        processed.add(resolved)
+        process_dir(d)
+
+    # 레지스트리에서 얻은 경로는 직접 처리 (Cartan 폴더 자체)
+    for rp in reg_paths:
+        if rp:
+            maybe_process(Path(rp))
+
+    # 일반 설치 경로 하위에서 키워드 일치 폴더 탐색
     for base in bases:
         if not base.exists():
             continue
         try:
             for item in base.iterdir():
-                if any(k in item.name.lower() for k in kw):
-                    process_dir(item)
+                if item.is_dir() and any(k in item.name.lower() for k in kw):
+                    maybe_process(item)
         except:
             pass
 
@@ -452,11 +470,11 @@ def _test_db_access(path: Path) -> dict:
         result["read_ok"] = True
         con.close()
 
-        # WAL 모드 전환 테스트 (동시 접근 핵심)
-        con2 = sqlite3.connect(str(path), timeout=3)
-        con2.execute("PRAGMA journal_mode=WAL")
+        # WAL 모드 확인 (읽기만 — 설정하지 않음, Cartan에 영향 없음)
+        con2 = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=3)
         journal = con2.execute("PRAGMA journal_mode").fetchone()[0]
         result["wal_ok"] = (journal == "wal")
+        result["journal_mode"] = journal
         con2.close()
 
         # 쓰기 접근 테스트 (ROLLBACK — 실제 데이터 변경 없음)
@@ -513,9 +531,10 @@ def section_db_access_test(all_dbs: list[Path]) -> None:
         write_icon = "✅" if r["write_ok"] else "❌"
         wal_icon   = "✅" if r["wal_ok"]   else "⚠ "
 
+        journal_str = r.get("journal_mode", "?")
         log(f"  읽기 접근:   {read_icon}  {'성공' if r['read_ok']  else '실패 — 파일이 잠겨있거나 암호화됨'}")
         log(f"  쓰기 접근:   {write_icon}  {'성공 (ROLLBACK 완료)' if r['write_ok'] else '실패 — 에이전트가 Cartan에 반영 불가'}")
-        log(f"  WAL 모드:    {wal_icon}  {'동시 접근 지원' if r['wal_ok']   else 'WAL 전환 실패 — 일부 동시 접근 제한될 수 있음'}")
+        log(f"  저널 모드:   {wal_icon}  현재={journal_str}  {'(동시 접근 지원)' if r['wal_ok'] else '(WAL 아님 — 에이전트가 첫 실행 시 WAL로 전환 예정)'}")
 
         if r["error"]:
             log(f"  오류 상세:   {r['error']}")
@@ -597,10 +616,17 @@ def section_open_files(cartan_pids: list[int]) -> None:
         log("  Cartan 프로세스가 실행 중이지 않음 — Cartan을 실행한 뒤 재실행하면 DB 경로를 자동 탐지합니다")
         return
 
-    # wmic으로 실행 파일 경로
+    # wmic으로 실행 파일 경로 + 작업 디렉토리
     for pid in cartan_pids:
-        result = run(f'wmic process where "ProcessId={pid}" get ExecutablePath,CommandLine /format:list')
-        log(f"  PID {pid}:\n{result}")
+        exe_info = run(f'wmic process where "ProcessId={pid}" get ExecutablePath,CommandLine,WorkingSetSize /format:list')
+        log(f"  PID {pid}:\n{exe_info}")
+        # 열린 파일 목록 (wmic handle → Windows 7 이상 가능)
+        handle_info = run(f'wmic process where "ProcessId={pid}" get HandleCount /format:list')
+        log(f"  핸들 수: {handle_info.strip()}")
+        # netstat으로 Cartan이 사용 중인 포트 확인
+        net_info = run(f'netstat -ano | findstr "{pid}"')
+        if net_info.strip():
+            log(f"  네트워크 포트:\n{net_info}")
 
     # handle64.exe (Sysinternals)
     exe_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
@@ -633,6 +659,24 @@ def section_summary(all_dbs: list[Path], parking_dbs: list[Path]) -> None:
         log("  ★ 주차 관련 DB (우선 확인 대상):")
         for p in parking_dbs:
             log(f"    {p}")
+    log("")
+    log("  ─────────────────────────────────────────────────────")
+    log("  📋  에이전트 config.json 설정을 위한 체크리스트")
+    log("  ─────────────────────────────────────────────────────")
+    log("  보고서의 [6/9] 섹션에서 아래 항목을 확인하세요:")
+    log("")
+    log("  □ CARTAN_DB_PATH      → [5/9] 또는 [6/9]에서 .db/.sqlite 파일 전체 경로")
+    log("  □ CARTAN_TABLE_VISITOR → ★ 표시된 주차 관련 테이블명")
+    log("  □ CARTAN_COL_PLATE    → 차량번호 저장 컬럼명 (예: car_number, plate_no)")
+    log("  □ CARTAN_COL_UNIT     → 동/호수 컬럼명 (예: dong, ho, unit)")
+    log("  □ CARTAN_COL_VALID_FROM → 허용 시작 시각 컬럼명 (예: start_dt, valid_from)")
+    log("  □ CARTAN_COL_VALID_UNTIL → 허용 종료 시각 컬럼명 (예: end_dt, valid_until)")
+    log("  □ 날짜 형식           → 최근 5행 샘플 데이터에서 확인 (예: 2025-01-15 or 20250115)")
+    log("  □ 차량번호 형식       → 최근 5행 샘플 데이터에서 확인 (예: 12가3456 or 12 가 3456)")
+    log("")
+    log("  □ DB 읽기 가능?       → [7/9] 읽기 접근 ✅ 확인")
+    log("  □ DB 쓰기 가능?       → [7/9] 쓰기 접근 ✅ 확인")
+    log("  □ 에이전트 시나리오   → 읽기+쓰기 ✅ → S1(직접 SQLite)  |  실패 → S5(UI 자동화) 필요")
     log("")
     log("  공유 방법: 이 txt 파일을 카카오톡으로 전송")
     log(f"  파일 위치: {REPORT_PATH}")
