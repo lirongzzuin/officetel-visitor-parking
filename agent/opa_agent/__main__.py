@@ -45,7 +45,6 @@ logging.basicConfig(
         ),
     ],
 )
-import logging.handlers
 
 logger = logging.getLogger(__name__)
 
