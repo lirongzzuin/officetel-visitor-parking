@@ -104,8 +104,8 @@ def _process_queue_item(item: dict) -> None:
                 plate=plate,
                 plate_display=pl.get("plate_display", plate),
                 unit=unit,
-                valid_from=d.replace(hour=6),
-                valid_until=d.replace(hour=18),
+                valid_from=d.replace(hour=0, minute=0, second=0),
+                valid_until=d.replace(hour=23, minute=59, second=59),
                 external_id=pl.get("registration_id"),
             )
             ok = _adapter.add_visitor(record)

@@ -48,4 +48,6 @@ LOG_LEVEL            = lambda: get("LOG_LEVEL", "INFO")
 
 def write_config(data: dict) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+    existing = _load_file()
+    existing.update(data)
+    CONFIG_PATH.write_text(json.dumps(existing, ensure_ascii=False, indent=2), "utf-8")
