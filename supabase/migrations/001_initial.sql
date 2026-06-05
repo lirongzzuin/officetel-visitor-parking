@@ -81,10 +81,9 @@ CREATE TABLE IF NOT EXISTS reports (
 
 CREATE INDEX idx_reports_plate ON reports(plate_normalized, created_at);
 
--- 60분 내 같은 plate 중복 신고 방지 (서비스 레이어에서 추가 검증)
-CREATE UNIQUE INDEX idx_reports_dedup
-  ON reports(plate_normalized, (DATE_TRUNC('hour', created_at)))
-  WHERE status = 'pending';
+-- 60분 내 같은 plate 중복 신고 방지는 서비스 레이어에서 처리
+-- (DATE_TRUNC는 STABLE이라 index expression 불가 → API route에서 60분 체크)
+CREATE INDEX idx_reports_created ON reports(plate_normalized, created_at);
 
 -- ── 벌점 이력 ────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS penalty_history (

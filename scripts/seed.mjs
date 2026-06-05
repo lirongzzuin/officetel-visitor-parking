@@ -92,7 +92,7 @@ async function createAccount(unit, role = 'resident', displayName = null) {
   }
 
   process.stdout.write(role === 'admin' ? 'A' : '.');
-  return { created: true };
+  return { created: true, userId };
 }
 
 // ── 메인 ──────────────────────────────────────────────────
@@ -111,10 +111,7 @@ async function main() {
     if (!result.skipped && !result.error) {
       const tmpPw = randomBytes(8).toString('hex');
       // 관리자는 보안을 위해 랜덤 초기 비밀번호
-      await supabase.auth.admin.updateUserByEmail(
-        `${unit}@officetel-parking.internal`,
-        { password: tmpPw }
-      );
+      await supabase.auth.admin.updateUserById(result.userId, { password: tmpPw });
       console.log(`\n  ✅  ${unit} → 초기 비밀번호: ${tmpPw}  (꼭 메모하세요!)`);
     } else if (result.skipped) {
       console.log(`\n  건너뜀 (이미 존재): ${unit}`);

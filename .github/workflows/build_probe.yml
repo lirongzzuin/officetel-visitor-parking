@@ -7,6 +7,9 @@ on:
       - '.github/workflows/build_probe.yml'
   workflow_dispatch:   # 수동 실행 가능
 
+permissions:
+  contents: write
+
 jobs:
   build-windows-exe:
     runs-on: windows-latest

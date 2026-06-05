@@ -56,7 +56,7 @@ if not exist "%INSTALL_DIR%\logs" mkdir "%INSTALL_DIR%\logs"
 echo [2/6] 파일 복사...
 copy /y "%~dp0%EXE_NAME%"    "%INSTALL_DIR%\%EXE_NAME%"   >nul
 copy /y "%~dp0config.json"   "%INSTALL_DIR%\config.json"  >nul
-copy /y "%~dp0%NSSM%"        "%INSTALL_DIR%\nssm.exe"     >nul 2>&1
+copy /y "%NSSM%"             "%INSTALL_DIR%\nssm.exe"     >nul 2>&1
 
 :: ── 기존 서비스 제거 ──────────────────────────────────
 echo [3/6] 기존 서비스 확인...

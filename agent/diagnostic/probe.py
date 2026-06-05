@@ -1,5 +1,5 @@
 """
-탄탄코어 Cartan800 DB 탐침 v2.4
+탄탄코어 Cartan800 DB 탐침 v2.5
 더블클릭 실행 → 바탕화면에 보고서 저장 + 메모장 자동 열기
 
 의존성: Python 표준 라이브러리만 사용 (sqlite3 내장)
@@ -112,7 +112,7 @@ def bytes_fmt(n: int) -> str:
 def section_system() -> None:
     try:
         sep()
-        log("  탄탄코어 Cartan800 DB 탐침 보고서 v2.3")
+        log("  탄탄코어 Cartan800 DB 탐침 보고서 v2.5")
         log(f"  생성: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         log(f"  PC명: {os.environ.get('COMPUTERNAME','?')}  /  사용자: {os.environ.get('USERNAME','?')}")
         log(f"  보고서: {_report_path}")
@@ -455,12 +455,12 @@ def section_sqlite_schema(all_dbs: list[Path]) -> list[Path]:
 
 
 def section_access_schema(all_dbs: list[Path]) -> list[Path]:
-    """PowerShell COM 자동화로 .mdb/.accdb 스키마 + 샘플 데이터 읽기"""
+    """ODBC + OLE DB 두 방식, 32/64-bit PS 모두 시도해서 .mdb 스키마 읽기 (v2.5)"""
     parking_dbs: list[Path] = []
     try:
         log("")
         log("[6b/9] Microsoft Access (.mdb) 스키마 + 샘플 데이터")
-        log("       (32-bit Jet OLEDB 4.0 또는 64-bit ACE OLEDB 12.0 시도)")
+        log("       (ODBC + OLE DB, 64-bit + 32-bit PS 모두 시도)")
         sep("-")
 
         access_dbs = [p for p in all_dbs if p.suffix.lower() in {".mdb", ".accdb"}]
@@ -468,17 +468,92 @@ def section_access_schema(all_dbs: list[Path]) -> list[Path]:
             log("  .mdb/.accdb 파일 없음 — 건너뜀")
             return parking_dbs
 
+        ps32 = r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+        ps64 = "powershell.exe"
+
+        # ── ODBC 드라이버 목록 확인 (진단용) ──────────────────────────
+        log("  [ODBC 드라이버 목록]")
+        odbc_list_script = (
+            "Get-OdbcDriver | "
+            "Where-Object { $_.Name -like '*Access*' -or $_.Name -like '*Excel*' } | "
+            "Select-Object Name,Platform | Format-Table -AutoSize"
+        )
+        for bits, ps_exe in [("64-bit", ps64), ("32-bit", ps32)]:
+            try:
+                r = subprocess.run(
+                    [ps_exe, "-NoProfile", "-NonInteractive",
+                     "-ExecutionPolicy", "Bypass", "-Command", odbc_list_script],
+                    capture_output=True, text=True, timeout=10,
+                    encoding="utf-8", errors="replace",
+                )
+                out = (r.stdout + r.stderr).strip()
+                if out:
+                    log(f"  [{bits}]")
+                    for ln in out.splitlines():
+                        if ln.strip():
+                            log(f"    {ln}")
+                else:
+                    log(f"  [{bits}] Access ODBC 드라이버 없음")
+            except FileNotFoundError:
+                log(f"  [{bits}] powershell.exe 없음: {ps_exe}")
+            except Exception as e:
+                log(f"  [{bits}] 오류: {e}")
+        log("")
+
         kw = ["visitor", "guest", "car", "plate", "visit", "방문", "주차", "carno",
               "dong", "intime", "outtime", "unit", "ho", "valid", "anpr"]
 
-        ps_template = r"""
+        # ── ODBC 방식 스크립트 (System.Data.Odbc — OLE DB와 완전히 다른 드라이버) ──
+        ps_odbc = r"""
+$db = '{db_path}'
+$drivers = @(
+  'Microsoft Access Driver (*.mdb, *.accdb)',
+  'Microsoft Access Driver (*.mdb)'
+)
+foreach ($drv in $drivers) {{
+  try {{
+    $cs = "Driver={{$drv}};DBQ=$db;ReadOnly=1;"
+    $conn = New-Object System.Data.Odbc.OdbcConnection($cs)
+    $conn.Open()
+    Write-Host "PROVIDER_OK:ODBC/$drv"
+    $schema = $conn.GetSchema('Tables')
+    $tnames = @()
+    foreach ($row in $schema.Rows) {{
+      if ($row['TABLE_TYPE'] -eq 'TABLE') {{ $tnames += $row['TABLE_NAME'] }}
+    }}
+    Write-Host "TABLES:$($tnames -join ',')"
+    foreach ($tbl in $tnames) {{
+      try {{
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = "SELECT TOP 5 * FROM [$tbl]"
+        $rd = $cmd.ExecuteReader()
+        $cols = @(); for ($i=0; $i -lt $rd.FieldCount; $i++) {{ $cols += $rd.GetName($i) }}
+        Write-Host "TABLE:$tbl|COLS:$($cols -join ',')"
+        $n = 0
+        while ($rd.Read() -and $n -lt 5) {{
+          $vals = @(); for ($i=0; $i -lt $rd.FieldCount; $i++) {{ $vals += [string]$rd[$i] }}
+          Write-Host "ROW:$($vals -join '|')"
+          $n++
+        }}
+        $rd.Close()
+      }} catch {{ Write-Host "TBL_ERR:$tbl $_" }}
+    }}
+    $conn.Close()
+    exit 0
+  }} catch {{ Write-Host "PROV_FAIL:ODBC/$drv $_" }}
+}}
+Write-Host "ALL_PROVIDERS_FAILED"
+"""
+
+        # ── OLE DB 방식 스크립트 (ADODB COM 자동화) ─────────────────────
+        ps_oledb = r"""
 $db = '{db_path}'
 $providers = @('Microsoft.ACE.OLEDB.12.0', 'Microsoft.Jet.OLEDB.4.0')
 foreach ($prov in $providers) {{
   try {{
     $conn = New-Object -ComObject ADODB.Connection
     $conn.Open("Provider=$prov;Data Source=$db;Mode=Read;")
-    Write-Host "PROVIDER_OK:$prov"
+    Write-Host "PROVIDER_OK:OLEDB/$prov"
     $sc = $conn.OpenSchema(20)
     $tnames = @()
     while (-not $sc.EOF) {{
@@ -503,22 +578,30 @@ foreach ($prov in $providers) {{
       }} catch {{ Write-Host "TBL_ERR:$tbl $_" }}
     }}
     $conn.Close()
-    break
-  }} catch {{ Write-Host "PROV_FAIL:$prov $_" }}
+    exit 0
+  }} catch {{ Write-Host "PROV_FAIL:OLEDB/$prov $_" }}
 }}
 Write-Host "ALL_PROVIDERS_FAILED"
 """
 
-        # 32-bit PowerShell (Jet OLEDB 4.0 사용 가능)
-        ps32 = r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
-        ps64 = "powershell.exe"
+        # 시도 순서: ODBC 64 → ODBC 32 → OLE DB 64 → OLE DB 32
+        attempts = [
+            ("ODBC",  ps64, "64-bit", ps_odbc),
+            ("ODBC",  ps32, "32-bit", ps_odbc),
+            ("OLEDB", ps64, "64-bit", ps_oledb),
+            ("OLEDB", ps32, "32-bit", ps_oledb),
+        ]
 
         for path in access_dbs:
             log(f"\n  ┌─ {path}")
-            # PowerShell 단일따옴표 문자열 — 백슬래시 이스케이프 불필요
-            script = ps_template.format(db_path=str(path))
-            output = ""
-            for ps_exe in (ps32, ps64):
+            provider_ok = False
+            is_parking  = False
+            all_raw: list[str] = []   # 모든 시도의 원시 출력 누적
+
+            for method, ps_exe, bits, template in attempts:
+                if provider_ok:
+                    break
+                script = template.format(db_path=str(path))
                 try:
                     r = subprocess.run(
                         [ps_exe, "-NoProfile", "-NonInteractive",
@@ -526,50 +609,56 @@ Write-Host "ALL_PROVIDERS_FAILED"
                         capture_output=True, text=True, timeout=30,
                         encoding="utf-8", errors="replace",
                     )
-                    output = (r.stdout + r.stderr).strip()
-                    if "PROVIDER_OK" in output or "TABLES:" in output:
-                        break
+                    out = (r.stdout + r.stderr).strip()
+                    all_raw.append(f"── [{method}/{bits}] ──\n{out}")
+                    if "PROVIDER_OK" in out:
+                        provider_ok = True
+                        log(f"  │  [사용 방식: {method} / {bits}]")
+                        col_names: list[str] = []
+                        for line in out.splitlines():
+                            if line.startswith("PROVIDER_OK:"):
+                                log(f"  │  ✅  드라이버: {line.split(':', 1)[1]}")
+                            elif line.startswith("TABLES:"):
+                                tables = [t for t in line.split(":", 1)[1].split(",") if t]
+                                log(f"  │  테이블 목록 ({len(tables)}개): {', '.join(tables)}")
+                            elif line.startswith("TABLE:"):
+                                parts = line.split("|COLS:")
+                                tbl = parts[0].replace("TABLE:", "")
+                                col_names = parts[1].split(",") if len(parts) > 1 else []
+                                tbl_parking = (
+                                    any(k in tbl.lower() for k in kw) or
+                                    any(any(k in c.lower() for k in kw) for c in col_names)
+                                )
+                                marker = "★" if tbl_parking else " "
+                                log(f"  │\n  │  {marker} [{tbl}]")
+                                log(f"  │    컬럼: {', '.join(col_names)}")
+                                if tbl_parking:
+                                    is_parking = True
+                            elif line.startswith("ROW:"):
+                                log(f"  │    {line[4:]}")
+                            elif line.startswith("PROV_FAIL:"):
+                                log(f"  │  (시도 실패: {line})")
+                            elif line.startswith("TBL_ERR:"):
+                                log(f"  │  (테이블 오류: {line})")
+                    else:
+                        # 실패 요약 한 줄만
+                        fail_lines = [l for l in out.splitlines() if "FAIL" in l or "오류" in l or "Error" in l]
+                        summary = fail_lines[0] if fail_lines else (out[:120] if out else "(출력 없음)")
+                        log(f"  │  [{method}/{bits}] 실패: {summary}")
+
+                except FileNotFoundError:
+                    all_raw.append(f"── [{method}/{bits}] PS 없음: {ps_exe}")
+                    log(f"  │  [{method}/{bits}] powershell 없음 (경로: {ps_exe})")
                 except Exception as e:
-                    output = f"(PowerShell 실행 실패: {e})"
-
-            provider_ok = False
-            is_parking = False
-            current_table = ""
-            col_names: list[str] = []
-
-            for line in output.splitlines():
-                if line.startswith("PROVIDER_OK:"):
-                    provider_ok = True
-                    log(f"  │  ✅  드라이버: {line.split(':', 1)[1]}")
-                elif line.startswith("TABLES:"):
-                    tables = [t for t in line.split(":", 1)[1].split(",") if t]
-                    log(f"  │  테이블 목록: {', '.join(tables)}")
-                elif line.startswith("TABLE:"):
-                    parts = line.split("|COLS:")
-                    current_table = parts[0].replace("TABLE:", "")
-                    col_names = parts[1].split(",") if len(parts) > 1 else []
-                    tbl_is_parking = (
-                        any(k in current_table.lower() for k in kw) or
-                        any(any(k in c.lower() for k in kw) for c in col_names)
-                    )
-                    marker = "★" if tbl_is_parking else " "
-                    log(f"  │\n  │  {marker} [{current_table}]")
-                    log(f"  │    컬럼: {', '.join(col_names)}")
-                    if tbl_is_parking:
-                        is_parking = True
-                elif line.startswith("ROW:"):
-                    log(f"  │    {line[4:]}")
-                elif line.startswith("PROV_FAIL:"):
-                    log(f"  │  (시도 실패: {line})")
-                elif line.startswith("TBL_ERR:"):
-                    log(f"  │  (테이블 오류: {line})")
-                elif "ALL_PROVIDERS_FAILED" in line:
-                    log("  │  ⚠  모든 드라이버 실패 — Office/Access Database Engine이 없을 수 있음")
+                    all_raw.append(f"── [{method}/{bits}] 예외: {e}")
+                    log(f"  │  [{method}/{bits}] 예외: {e}")
 
             if not provider_ok:
-                log(f"  │  ⚠  스키마 읽기 실패 (원시 출력):")
-                for line in output.splitlines()[:10]:
-                    log(f"  │    {line}")
+                log("  │")
+                log("  │  ⚠  모든 방식 실패 — 전체 원시 출력:")
+                for chunk in all_raw:
+                    for ln in chunk.splitlines()[:8]:
+                        log(f"  │    {ln}")
 
             if is_parking:
                 parking_dbs.append(path)
@@ -763,7 +852,7 @@ def main() -> None:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     print("=" * 60)
-    print("  탄탄코어 Cartan800 DB 탐침 v2.4")
+    print("  탄탄코어 Cartan800 DB 탐침 v2.5")
     print("  시작 중...")
     print("=" * 60)
 

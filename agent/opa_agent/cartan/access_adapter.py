@@ -28,11 +28,10 @@ class CartanAccessAdapter(CartanAdapter):
         self.col_from  = cfg.CARTAN_VALID_FROM()    or "intime"
         self.col_until = cfg.CARTAN_VALID_UNTIL()   or "outtime"
 
-    def _conn_str(self) -> str:
-        return (
-            f"DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};"
-            f"DBQ={self.db_path};"
-        )
+    _DRIVERS = [
+        "Microsoft Access Driver (*.mdb, *.accdb)",
+        "Microsoft Access Driver (*.mdb)",
+    ]
 
     def _connect(self):
         try:
@@ -42,7 +41,14 @@ class CartanAccessAdapter(CartanAdapter):
                 "pyodbc 모듈이 없습니다. "
                 "에이전트 EXE는 PyInstaller로 pyodbc를 포함해야 합니다."
             )
-        return pyodbc.connect(self._conn_str(), autocommit=False)
+        last_err: Exception = RuntimeError("ODBC 드라이버 없음")
+        for drv in self._DRIVERS:
+            try:
+                cs = f"DRIVER={{{drv}}};DBQ={self.db_path};"
+                return pyodbc.connect(cs, autocommit=False)
+            except Exception as e:
+                last_err = e
+        raise last_err
 
     def health_check(self) -> bool:
         if not Path(self.db_path).exists():
