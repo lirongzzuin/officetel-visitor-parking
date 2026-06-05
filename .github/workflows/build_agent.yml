@@ -21,10 +21,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.12 (32-bit — Access ODBC 드라이버 호환)
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          architecture: 'x86'
 
       - name: Install dependencies
         run: |
