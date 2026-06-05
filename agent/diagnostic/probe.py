@@ -32,9 +32,31 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-# ── 보고서 경로 ───────────────────────────────────────────
-DESKTOP = Path.home() / "Desktop"
-REPORT_PATH = DESKTOP / f"cartan_probe_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+# ── 보고서 경로 (바탕화면 → 문서 → 임시 폴더 순으로 폴백) ──
+_TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+_FNAME = f"cartan_probe_{_TIMESTAMP}.txt"
+
+def _pick_report_path() -> Path:
+    candidates = [
+        Path.home() / "Desktop" / _FNAME,
+        Path.home() / "바탕 화면" / _FNAME,
+        Path.home() / "OneDrive" / "바탕 화면" / _FNAME,
+        Path.home() / "OneDrive" / "Desktop" / _FNAME,
+        Path.home() / "Documents" / _FNAME,
+        Path.home() / "문서" / _FNAME,
+        Path(tempfile.gettempdir()) / _FNAME,
+        Path.cwd() / _FNAME,
+    ]
+    for p in candidates:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.touch()
+            return p
+        except Exception:
+            continue
+    return Path(tempfile.gettempdir()) / _FNAME  # 최후 폴백
+
+REPORT_PATH = _pick_report_path()
 _fp = None  # 파일 핸들 (incremental write)
 
 def _open_report():
@@ -686,36 +708,65 @@ def section_summary(all_dbs: list[Path], parking_dbs: list[Path]) -> None:
 # 메인
 # ════════════════════════════════════════════════════════════
 def main() -> None:
-    _open_report()
-    print(f"탄탄코어 Cartan800 DB 탐침 v2.0 시작\n보고서: {REPORT_PATH}\n")
-
+    # 최상위 예외도 반드시 잡아서 창이 안 닫히게 함
     try:
-        section_system()
-        cartan_pids = section_processes()
-        reg_paths   = section_registry()
-        install_dbs = section_install_dirs(reg_paths)
-        all_dbs     = section_db_scan(install_dbs)
-        parking_dbs = section_sqlite_schema(all_dbs)
-        section_db_access_test(all_dbs)
-        section_network()
-        section_open_files(cartan_pids)
-        section_summary(all_dbs, parking_dbs)
-    except Exception as e:
-        log(f"\n\n[오류] {e}")
-        import traceback
-        log(traceback.format_exc())
-    finally:
-        close_report()
+        print("=" * 60)
+        print("  탄탄코어 Cartan800 DB 탐침 v2.1")
+        print(f"  보고서 저장 위치: {REPORT_PATH}")
+        print("=" * 60)
+        print("  탐색 시작... (1~3분 소요)")
+        print()
 
-    if sys.platform == "win32":
+        _open_report()
+
+        try:
+            section_system()
+            cartan_pids = section_processes()
+            reg_paths   = section_registry()
+            install_dbs = section_install_dirs(reg_paths)
+            all_dbs     = section_db_scan(install_dbs)
+            parking_dbs = section_sqlite_schema(all_dbs)
+            section_db_access_test(all_dbs)
+            section_network()
+            section_open_files(cartan_pids)
+            section_summary(all_dbs, parking_dbs)
+        except Exception as e:
+            import traceback
+            msg = f"\n\n[오류 발생]\n{e}\n{traceback.format_exc()}"
+            print(msg)
+            try:
+                log(msg)
+            except Exception:
+                pass
+        finally:
+            close_report()
+
+        print(f"\n✅  완료! 보고서 위치: {REPORT_PATH}")
+
+        # 메모장으로 자동 열기
         try:
             os.startfile(str(REPORT_PATH))
-        except:
+        except Exception:
             pass
 
-    print(f"\n완료! 보고서: {REPORT_PATH}")
-    if sys.platform == "win32":
+    except Exception as fatal:
+        import traceback
+        print("\n" + "=" * 60)
+        print("  [치명 오류] 탐침 실행 중 예외 발생:")
+        print(f"  {fatal}")
+        print(traceback.format_exc())
+        print("=" * 60)
+        # 오류 내용을 임시 파일에 저장
+        try:
+            err_path = Path(tempfile.gettempdir()) / f"probe_error_{_TIMESTAMP}.txt"
+            err_path.write_text(traceback.format_exc(), encoding="utf-8")
+            print(f"  오류 로그: {err_path}")
+        except Exception:
+            pass
+
+    finally:
         input("\n엔터를 누르면 창이 닫힙니다...")
+
 
 if __name__ == "__main__":
     main()
