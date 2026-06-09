@@ -824,10 +824,38 @@ def section_summary(all_dbs: list[Path], parking_dbs: list[Path]) -> None:
             log("  ★ 주차 관련 DB:")
             for p in parking_dbs:
                 log(f"    {p}")
+
+        # DB 확장자로 CARTAN_SCENARIO 자동 추천
+        log("")
+        log("  ─────────────────────────────────────────────────────")
+        log("  CARTAN_SCENARIO 추천")
+        log("  ─────────────────────────────────────────────────────")
+        sqlite_exts = {".db", ".sqlite", ".sqlite3", ".s3db"}
+        access_exts = {".mdb", ".accdb"}
+        has_sqlite = any(p.suffix.lower() in sqlite_exts for p in parking_dbs)
+        has_access = any(p.suffix.lower() in access_exts for p in parking_dbs)
+
+        if has_access:
+            log('  → CARTAN_SCENARIO = "S2"  (.mdb/.accdb 발견 — Access 어댑터)')
+        elif has_sqlite:
+            log('  → CARTAN_SCENARIO = "S1"  (.db/.sqlite 발견 — SQLite 어댑터)')
+        elif all_dbs:
+            has_sqlite_all = any(p.suffix.lower() in sqlite_exts for p in all_dbs)
+            has_access_all = any(p.suffix.lower() in access_exts for p in all_dbs)
+            if has_access_all:
+                log('  → CARTAN_SCENARIO = "S2"  (.mdb 발견 — 주차 테이블 확인 필요)')
+            elif has_sqlite_all:
+                log('  → CARTAN_SCENARIO = "S1"  (.db 발견 — 주차 테이블 확인 필요)')
+            else:
+                log("  → 판단 불가 — 보고서 [6/9] 또는 [6b/9]에서 수동 확인")
+        else:
+            log("  → DB 파일 없음 — Cartan 실행 중인지 확인 필요")
+
         log("")
         log("  ─────────────────────────────────────────────────────")
         log("  config.json 에 입력할 값 (보고서 [6/9] 또는 [6b/9]에서 확인)")
         log("  ─────────────────────────────────────────────────────")
+        log("  □ CARTAN_SCENARIO       → 위 추천값 참고 (S1 또는 S2)")
         log("  □ CARTAN_DB_PATH        → DB 파일 전체 경로")
         log("  □ CARTAN_VISITOR_TABLE  → ★ 표시 테이블명")
         log("  □ CARTAN_PLATE_COL      → 차량번호 컬럼명")
