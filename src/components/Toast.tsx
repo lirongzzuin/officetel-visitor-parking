@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
@@ -67,13 +67,13 @@ export function useToast() {
     visible: false,
   });
 
-  function show(message: string, type: ToastType = 'info') {
+  const show = useCallback((message: string, type: ToastType = 'info') => {
     setState({ message, type, visible: true });
-  }
+  }, []);
 
-  function hide() {
+  const hide = useCallback(() => {
     setState((s) => ({ ...s, visible: false }));
-  }
+  }, []);
 
   const toastEl = (
     <Toast message={state.message} type={state.type} visible={state.visible} onHide={hide} />

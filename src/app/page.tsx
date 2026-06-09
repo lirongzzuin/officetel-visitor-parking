@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { setAuth, hasPwChanged, getAuthUnit } from '@/lib/store';
+import { setAuth, getAuthUnit } from '@/lib/store';
+import { apiFetch } from '@/lib/api-client';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -16,7 +17,7 @@ export default function LoginPage() {
     if (getAuthUnit()) router.replace('/home');
   }, [router]);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
     if (!unit || !password) {
@@ -24,21 +25,28 @@ export default function LoginPage() {
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      // Initial password = unit number; any 6+ char also accepted for demo
-      const valid = password === unit || password.length >= 6;
-      if (valid) {
-        setAuth(unit);
-        if (!hasPwChanged()) {
-          router.push('/change-password');
-        } else {
-          router.push('/home');
-        }
+    try {
+      const data = await apiFetch<{
+        access_token: string;
+        unit: string;
+        role: string;
+        must_change_password: boolean;
+      }>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ unit, password }),
+        skipAuth: true,
+      });
+      setAuth(data.unit, data.access_token, data.role);
+      if (data.must_change_password && data.role !== 'admin') {
+        window.location.href = '/change-password';
       } else {
-        setError('호수 또는 비밀번호가 올바르지 않습니다.');
+        window.location.href = '/home';
       }
-    }, 800);
+    } catch (e: unknown) {
+      setError((e as Error).message ?? '로그인에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -69,10 +77,10 @@ export default function LoginPage() {
           <div className="relative">
             <input
               type="text"
-              inputMode="numeric"
+              inputMode="text"
               placeholder="예: 1001"
               value={unit}
-              onChange={(e) => setUnit(e.target.value.replace(/\D/g, ''))}
+              onChange={(e) => setUnit(e.target.value)}
               className="w-full h-12 px-4 pr-12 rounded-xl border-2 border-[var(--color-outline-variant)]
                 bg-[var(--color-surface-container-lowest)] text-[var(--color-on-surface)]
                 placeholder:text-[var(--color-outline)] text-base
@@ -131,12 +139,12 @@ export default function LoginPage() {
 
       <p className="mt-6 text-sm text-center text-[var(--color-on-surface-variant)]">
         처음 로그인하시나요?{' '}
-        <span className="text-[var(--color-primary)] font-semibold">초기 비밀번호는 호수와 동일합니다</span>
+        <span className="text-[var(--color-primary)] font-semibold">초기 비밀번호: 호수 뒤에 0붙여 4자리 + 00 (예: 101호 → 010100)</span>
       </p>
 
       <footer className="mt-auto pt-12 text-center space-y-1">
-        <p className="text-xs text-[var(--color-on-surface-variant)]/60">관리사무소 문의: 010-XXXX-XXXX</p>
-        <p className="text-xs text-[var(--color-on-surface-variant)]/60">평일 09:00 – 18:00</p>
+        <p className="text-xs text-[var(--color-on-surface-variant)]/60">관리사무소 문의: {process.env.NEXT_PUBLIC_OFFICE_PHONE ?? '관리사무소'}</p>
+        <p className="text-xs text-[var(--color-on-surface-variant)]/60">{process.env.NEXT_PUBLIC_OFFICE_HOURS ?? '평일 09:00 – 18:00'}</p>
       </footer>
     </main>
   );

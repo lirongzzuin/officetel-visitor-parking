@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
 
   // 조회한 항목을 processing으로 마킹
   if (data && data.length > 0) {
-    const ids = data.map((r) => r.id);
+    const ids = data.map((r: { id: string }) => r.id);
     await supabase
       .from('sync_queue')
       .update({ status: 'processing' })

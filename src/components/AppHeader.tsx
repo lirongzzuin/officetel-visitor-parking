@@ -7,6 +7,9 @@ interface AppHeaderProps {
   showBack?: boolean;
   onBack?: () => void;
   showNotification?: boolean;
+  /** 미확인 알림이 있을 때 true — 빨간 점 표시 */
+  notificationDot?: boolean;
+  onNotificationTap?: () => void;
   rightAction?: React.ReactNode;
 }
 
@@ -15,6 +18,8 @@ export function AppHeader({
   showBack = false,
   onBack,
   showNotification = true,
+  notificationDot = false,
+  onNotificationTap,
   rightAction,
 }: AppHeaderProps) {
   return (
@@ -51,9 +56,14 @@ export function AppHeader({
       <div className="flex items-center gap-1">
         {rightAction}
         {showNotification && (
-          <button className="w-10 h-10 flex items-center justify-center rounded-full relative active:scale-90 transition-transform">
+          <button
+            onClick={onNotificationTap}
+            className="w-10 h-10 flex items-center justify-center rounded-full relative active:scale-90 transition-transform"
+          >
             <span className="material-symbols-outlined text-[var(--color-on-surface-variant)]">notifications</span>
-            <span className="absolute top-2 right-2 w-2 h-2 bg-[var(--color-error)] rounded-full border-2 border-[var(--color-surface)]" />
+            {notificationDot && (
+              <span className="absolute top-2 right-2 w-2 h-2 bg-[var(--color-error)] rounded-full border-2 border-[var(--color-surface)]" />
+            )}
           </button>
         )}
       </div>

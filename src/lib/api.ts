@@ -14,8 +14,12 @@ export type ApiError =
   | 'INVALID_PLATE'
   | 'AGENT_AUTH_FAILED';
 
-export function ok<T>(data: T, status = 200) {
-  return NextResponse.json({ ok: true, data }, { status });
+export function ok<T>(data: T, status = 200, cacheSeconds?: number) {
+  const headers: Record<string, string> = {};
+  if (cacheSeconds) {
+    headers['Cache-Control'] = `private, max-age=${cacheSeconds}, stale-while-revalidate=${cacheSeconds * 2}`;
+  }
+  return NextResponse.json({ ok: true, data }, { status, headers });
 }
 
 export function err(code: ApiError, message: string, status: number) {
@@ -51,4 +55,9 @@ export function todayKST(): string {
 export function isNightKST(): boolean {
   const h = new Date(Date.now() + 9 * 3600_000).getUTCHours();
   return h >= 18 || h < 6;
+}
+
+/** 현재 KST 시간이 주간(06:00~18:00)인지 */
+export function isDayKST(): boolean {
+  return !isNightKST();
 }

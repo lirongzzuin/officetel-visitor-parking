@@ -123,21 +123,38 @@ export function getTodayVisitors(unit: string = '1001'): VisitorEntry[] {
 export const CURRENT_PENALTY_SCORE = MOCK_PENALTIES.reduce((sum, p) => sum + p.points, 0);
 export const MAX_PENALTY = 10;
 
-// Auth helpers (localStorage-based for prototype)
+// Auth helpers
 export function getAuthUnit(): string | null {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem('officetel_unit');
 }
 
-export function setAuth(unit: string): void {
+export function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('officetel_token');
+}
+
+export function getAuthRole(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('officetel_role');
+}
+
+export function setAuth(unit: string, token: string, role = 'resident'): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem('officetel_unit', unit);
+  localStorage.setItem('officetel_token', token);
+  localStorage.setItem('officetel_role', role);
+  // 미들웨어(proxy.ts)가 서버 사이드에서 인증 확인할 수 있도록 쿠키에도 저장
+  document.cookie = `officetel_unit=${unit}; path=/; max-age=86400; SameSite=Lax`;
 }
 
 export function clearAuth(): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem('officetel_unit');
+  localStorage.removeItem('officetel_token');
+  localStorage.removeItem('officetel_role');
   localStorage.removeItem('officetel_pw_changed');
+  document.cookie = 'officetel_unit=; path=/; max-age=0';
 }
 
 export function hasPwChanged(): boolean {
@@ -162,7 +179,17 @@ export function setTheme(theme: 'light' | 'dark' | 'system'): void {
 }
 
 // Night hours: 18:00 ~ 06:00 next day
+// NEXT_PUBLIC_DEMO_MODE=true → always true so night features are accessible
 export function isNightHours(): boolean {
+  if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') return true;
   const h = new Date().getHours();
   return h >= 18 || h < 6;
+}
+
+// Day hours: 06:00 ~ 18:00
+// NEXT_PUBLIC_DEMO_MODE=true → always true so day features are accessible
+export function isDayHours(): boolean {
+  if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') return true;
+  const h = new Date().getHours();
+  return h >= 6 && h < 18;
 }

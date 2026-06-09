@@ -1,16 +1,26 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { setPwChanged, getAuthUnit } from '@/lib/store';
+import { setPwChanged, getAuthUnit, clearAuth } from '@/lib/store';
+import { apiFetch } from '@/lib/api-client';
 
 export default function ChangePasswordPage() {
   const router = useRouter();
-  const unit = getAuthUnit() ?? '';
+  const [unit, setUnitState] = useState('');
+  const [ready, setReady] = useState(false);
   const [current, setCurrent] = useState('');
   const [next_, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const u = getAuthUnit();
+    if (!u) { clearAuth(); router.replace('/'); return; }
+    setUnitState(u);
+    setReady(true);
+  }, [router]);
 
   const checks = [
     { label: '8자 이상', ok: next_.length >= 8 },
@@ -20,15 +30,26 @@ export default function ChangePasswordPage() {
   ];
   const allOk = checks.every((c) => c.ok) && next_ === confirm;
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!allOk) return;
+    setError('');
     setLoading(true);
-    setTimeout(() => {
+    try {
+      await apiFetch('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ current_password: current, new_password: next_ }),
+      });
       setPwChanged();
       router.push('/home');
-    }, 600);
+    } catch (e: unknown) {
+      setError((e as Error).message ?? '비밀번호 변경에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
   }
+
+  if (!ready) return null;
 
   return (
     <main className="min-h-dvh flex flex-col items-center justify-center px-5 py-8 bg-[var(--color-background)]">
@@ -88,6 +109,13 @@ export default function ChangePasswordPage() {
               </span>
             </div>
           </div>
+
+          {error && (
+            <p className="text-sm text-[var(--color-error)] flex items-center gap-1.5 px-1">
+              <span className="material-symbols-outlined text-[16px]">error</span>
+              {error}
+            </p>
+          )}
 
           <button
             type="submit"

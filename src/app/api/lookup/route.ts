@@ -1,13 +1,14 @@
 import { NextRequest } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
-import { ok, err, normalizePlate, isNightKST, todayKST } from '@/lib/api';
+import { ok, err, normalizePlate, formatPlate, isNightKST, todayKST } from '@/lib/api';
 import { getRequestUser } from '@/lib/auth';
 
 export async function GET(req: NextRequest) {
   const user = await getRequestUser(req);
   if (!user) return err('UNAUTHORIZED', '로그인이 필요합니다', 401);
 
-  if (user.role !== 'admin' && !isNightKST()) {
+  const demoMode = process.env.DEMO_MODE === 'true';
+  if (user.role !== 'admin' && !demoMode && !isNightKST()) {
     return err('TIME_RESTRICTED', '차량 조회는 오후 6시~오전 6시에만 가능합니다', 403);
   }
 
@@ -42,7 +43,7 @@ export async function GET(req: NextRequest) {
     return ok({
       kind: 'visitor',
       unit: reg.accounts?.unit_number ?? '?',
-      plate_display: normalizePlate(raw),
+      plate_display: formatPlate(raw),
     });
   }
 

@@ -15,11 +15,17 @@ export async function createClient() {
   );
 }
 
+// Singleton: reused across warm serverless invocations
+let _serviceClient: ReturnType<typeof createServerClient> | null = null;
+
 /** Service role 클라이언트 — RLS 우회. 서버 전용, 절대 클라이언트에 노출 금지 */
 export function createServiceClient() {
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { cookies: { getAll: () => [], setAll: () => {} } },
-  );
+  if (!_serviceClient) {
+    _serviceClient = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { cookies: { getAll: () => [], setAll: () => {} } },
+    );
+  }
+  return _serviceClient;
 }

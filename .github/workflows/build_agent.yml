@@ -2,14 +2,15 @@ name: Build & Release Agent EXE
 
 on:
   push:
-    tags:
-      - 'v*'           # v1.0.0, v1.1.0 등 태그 푸시 시 자동 빌드
-  workflow_dispatch:   # 수동 실행 (Actions 탭에서)
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - '.github/workflows/build_agent.yml'
+  workflow_dispatch:
     inputs:
-      prerelease:
-        description: 'Pre-release?'
-        type: boolean
-        default: false
+      tag:
+        description: '버전 태그 (예: v1.2.3, 비워두면 날짜 자동 생성)'
+        required: false
 
 permissions:
   contents: write
@@ -23,6 +24,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version tag
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="v1.$(date -u +%Y%m%d).${{ github.run_number }}"
+          fi
+          VER="${TAG#v}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "ver=$VER" >> $GITHUB_OUTPUT
+          echo "Auto version: $TAG"
 
       - name: Set up Python 3.12 (32-bit — Access ODBC 드라이버 호환)
         uses: actions/setup-python@v5
@@ -31,15 +48,12 @@ jobs:
           architecture: 'x86'
 
       - name: Install dependencies
-        run: |
-          pip install pyinstaller requests pyodbc
+        run: pip install pyinstaller pyodbc
 
       - name: Write version into source
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          if (-not $tag.StartsWith("v")) { $tag = "v0.0.0-dev" }
-          $ver = $tag.TrimStart("v")
+          $ver = "${{ steps.version.outputs.ver }}"
           (Get-Content opa_agent\__init__.py) -replace '__version__ = ".*"', "__version__ = `"$ver`"" |
             Set-Content opa_agent\__init__.py
           echo "Version set to $ver"
@@ -54,7 +68,7 @@ jobs:
             --clean `
             opa_agent\__main__.py
 
-      - name: Verify EXE exists
+      - name: Verify EXE
         shell: pwsh
         run: |
           $exe = "dist\officetel_agent.exe"
@@ -74,7 +88,6 @@ jobs:
           Copy-Item "installer\config.json.example"         "$zip_dir\"
           Copy-Item "installer\README_관리소장님께.txt"      "$zip_dir\"
 
-          # NSSM 설치 (Chocolatey — nssm.cc 사이트 불안정 대비)
           choco install nssm --no-progress -y | Out-Null
           $nssm_src = (Get-Command nssm -ErrorAction SilentlyContinue)?.Source
           if (-not $nssm_src) { $nssm_src = "C:\ProgramData\chocolatey\bin\nssm.exe" }
@@ -90,26 +103,24 @@ jobs:
           path: agent/installer_package/
           retention-days: 30
 
-      - name: Create GitHub Release (태그 푸시 시)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "에이전트 ${{ github.ref_name }}"
-          prerelease: ${{ inputs.prerelease || false }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "에이전트 ${{ steps.version.outputs.tag }}"
+          prerelease: false
           body: |
-            ## OO오피스텔 주차 관리 에이전트 ${{ github.ref_name }}
+            ## OO오피스텔 주차 관리 에이전트 ${{ steps.version.outputs.tag }}
 
-            ### 설치 방법
-            1. `officetel_agent_installer.zip` 다운로드 후 압축 해제
-            2. `config.json.example` → `config.json` 으로 복사 후 값 설정
-            3. `install.bat` 을 관리자 권한으로 실행
+            **빌드:** ${{ github.sha }}
+            **트리거:** ${{ github.event_name }}
 
             ### 자동 업데이트
-            - 에이전트가 1시간마다 이 페이지를 확인하고 자동 업데이트됩니다.
-            - 관리실 PC에 별도 작업 불필요.
+            - 관리실 PC의 에이전트가 1시간 내 자동으로 이 버전으로 업데이트됩니다.
+            - 별도 작업 불필요.
 
-            ### 변경 사항
-            <!-- 릴리즈 노트 여기에 -->
+            ### 수동 즉시 업데이트
+            - 서버에서 `update` 명령을 전송하면 즉시 적용됩니다.
           files: |
             agent/dist/officetel_agent.exe
             agent/officetel_agent_installer.zip

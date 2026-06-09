@@ -64,16 +64,15 @@ def is_newer(tag: str) -> bool:
         return False
 
 
-def _download(url: str, dest: Path, expected_sha256: Optional[str] = None) -> bool:
-    req = urllib.request.Request(url, headers=_github_headers())
+def _download_asset(asset_id: int, dest: Path) -> bool:
+    """GitHub release asset 다운로드 — private 레포 대응 (API URL + octet-stream)"""
+    url = f"https://api.github.com/repos/{cfg.GITHUB_REPO()}/releases/assets/{asset_id}"
+    headers = _github_headers()
+    headers["Accept"] = "application/octet-stream"
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = resp.read()
-        if expected_sha256:
-            actual = hashlib.sha256(data).hexdigest()
-            if actual != expected_sha256:
-                logger.error("체크섬 불일치: %s != %s", actual, expected_sha256)
-                return False
         dest.write_bytes(data)
         logger.info("다운로드 완료: %s (%d bytes)", dest, len(data))
         return True
@@ -82,10 +81,11 @@ def _download(url: str, dest: Path, expected_sha256: Optional[str] = None) -> bo
         return False
 
 
-def _find_asset(release: dict) -> Optional[str]:
+def _find_asset(release: dict) -> Optional[int]:
+    """ASSET_NAME 일치하는 asset_id 반환"""
     for asset in release.get("assets", []):
         if asset["name"] == ASSET_NAME:
-            return asset["browser_download_url"]
+            return asset["id"]
     return None
 
 
@@ -138,13 +138,13 @@ def check_and_update() -> None:
         return
 
     logger.info("새 버전 발견: %s → %s", __version__, tag)
-    url = _find_asset(release)
-    if not url:
+    asset_id = _find_asset(release)
+    if not asset_id:
         logger.warning("릴리즈에 %s 없음", ASSET_NAME)
         return
 
     tmp = Path(tempfile.mkdtemp()) / ASSET_NAME
-    if _download(url, tmp):
+    if _download_asset(asset_id, tmp):
         apply_update(tmp)
     else:
         logger.error("업데이트 다운로드 실패 — 현재 버전 유지")

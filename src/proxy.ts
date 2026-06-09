@@ -1,52 +1,31 @@
-import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-// 인증 불필요 경로
-const UNPROTECTED = new Set(['/', '/api/agent']);
 
-export async function proxy(request: NextRequest) {
+const PROTECTED = [
+  '/home', '/register', '/lookup', '/report',
+  '/visits', '/penalties', '/settings', '/change-password', '/notices',
+];
+
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // 에이전트 API는 별도 토큰 인증이므로 통과
-  if (pathname.startsWith('/api/agent/')) return NextResponse.next();
+  // 정적 자산 · API는 통과
+  if (pathname.startsWith('/api/')) return NextResponse.next();
 
-  let response = NextResponse.next({ request });
+  const isLoggedIn = !!request.cookies.get('officetel_unit')?.value;
+  const isProtected = PROTECTED.some((p) => pathname.startsWith(p));
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll()  { return request.cookies.getAll(); },
-        setAll(toSet) {
-          toSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          response = NextResponse.next({ request });
-          toSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          );
-        },
-      },
-    },
-  );
-
-  // 세션 갱신 (쿠키 업데이트 목적)
-  const { data: { user } } = await supabase.auth.getUser();
-
-  // 보호된 경로에 비로그인 상태 → 로그인 페이지로
-  const protectedPaths = [
-    '/home', '/register', '/lookup', '/report',
-    '/visits', '/penalties', '/settings', '/change-password',
-  ];
-  if (!user && protectedPaths.some((p) => pathname.startsWith(p))) {
+  // 비로그인 + 보호 경로 → 로그인
+  if (!isLoggedIn && isProtected) {
     return NextResponse.redirect(new URL('/', request.url));
   }
 
-  // 이미 로그인인데 로그인 페이지 접근 → 홈으로
-  if (user && pathname === '/') {
+  // 로그인 + 로그인 페이지 → 홈
+  if (isLoggedIn && pathname === '/') {
     return NextResponse.redirect(new URL('/home', request.url));
   }
 
-  return response;
+  return NextResponse.next();
 }
 
 export const proxyConfig = {

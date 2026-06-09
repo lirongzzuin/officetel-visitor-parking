@@ -6,8 +6,9 @@ import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
 import { BottomNav } from '@/components/BottomNav';
 import { useTheme } from '@/providers/ThemeProvider';
-import { getAuthUnit, clearAuth } from '@/lib/store';
+import { getAuthUnit, getAuthRole, clearAuth } from '@/lib/store';
 import { useToast } from '@/components/Toast';
+import { apiFetch } from '@/lib/api-client';
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -55,16 +56,22 @@ export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { show, toastEl } = useToast();
   const [unit, setUnit] = useState('');
-  const [pushEnabled, setPushEnabled] = useState(true);
-  const [expiryAlert, setExpiryAlert] = useState(true);
-  const [penaltyAlert, setPenaltyAlert] = useState(true);
+  const [role, setRole] = useState('');
   const [largeFontMode, setLargeFontMode] = useState(false);
   const [showThemePicker, setShowThemePicker] = useState(false);
+  const [demoLoading, setDemoLoading] = useState<'seed' | 'reset' | null>(null);
+  const [demoUnit, setDemoUnit] = useState('');
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [logoutLoading, setLogoutLoading] = useState(false);
+  const [pwResetUnit, setPwResetUnit] = useState('');
+  const [pwResetLoading, setPwResetLoading] = useState(false);
+  const [pwResetResult, setPwResetResult] = useState<string | null>(null);
 
   useEffect(() => {
     const u = getAuthUnit();
-    if (!u) { router.replace('/'); return; }
+    if (!u) { clearAuth(); router.replace('/'); return; }
     setUnit(u);
+    setRole(getAuthRole() ?? '');
     setLargeFontMode(document.documentElement.style.fontSize === '120%');
   }, [router]);
 
@@ -73,10 +80,65 @@ export default function SettingsPage() {
     document.documentElement.style.fontSize = on ? '120%' : '';
   }
 
-  function handleLogout() {
-    if (confirm('로그아웃 하시겠습니까?')) {
-      clearAuth();
-      router.replace('/');
+  async function confirmLogout() {
+    setLogoutLoading(true);
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // 서버 오류와 무관하게 로컬 인증 정보 삭제
+    }
+    clearAuth();
+    window.location.href = '/';
+  }
+
+  async function handleSeedDemo() {
+    setDemoLoading('seed');
+    try {
+      const body = demoUnit.trim() ? { unit: demoUnit.trim() } : {};
+      await apiFetch('/api/admin/seed-demo', { method: 'POST', body: JSON.stringify(body) });
+      const target = demoUnit.trim() ? `${demoUnit.trim()}호` : '내 계정';
+      show(`${target}에 데모 데이터가 준비되었습니다.`, 'success');
+    } catch (e: unknown) {
+      show((e as Error).message ?? '데모 데이터 초기화에 실패했습니다', 'error');
+    } finally {
+      setDemoLoading(null);
+    }
+  }
+
+  async function handleResetDemo() {
+    const target = demoUnit.trim() ? `${demoUnit.trim()}호` : '내 계정';
+    if (!confirm(`${target}의 모든 방문등록, 즐겨찾기, 벌점 데이터가 삭제됩니다.\n계속하시겠습니까?`)) return;
+    setDemoLoading('reset');
+    try {
+      const body = demoUnit.trim() ? { unit: demoUnit.trim() } : {};
+      await apiFetch('/api/admin/reset-demo', { method: 'POST', body: JSON.stringify(body) });
+      show(`${target} 데이터가 초기화되었습니다.`, 'success');
+    } catch (e: unknown) {
+      show((e as Error).message ?? '초기화에 실패했습니다', 'error');
+    } finally {
+      setDemoLoading(null);
+    }
+  }
+
+  async function handlePasswordReset() {
+    if (!pwResetUnit.trim()) {
+      show('호수를 입력하세요', 'error');
+      return;
+    }
+    setPwResetLoading(true);
+    setPwResetResult(null);
+    try {
+      const data = await apiFetch('/api/admin/reset-unit-password', {
+        method: 'POST',
+        body: JSON.stringify({ unit: pwResetUnit.trim() }),
+      });
+      const newPw = (data as { new_password: string }).new_password;
+      setPwResetResult(newPw);
+      show(`${pwResetUnit}호 비밀번호가 초기화되었습니다`, 'success');
+    } catch (e: unknown) {
+      show((e as Error).message ?? '초기화에 실패했습니다', 'error');
+    } finally {
+      setPwResetLoading(false);
     }
   }
 
@@ -101,7 +163,9 @@ export default function SettingsPage() {
           </div>
           <div>
             <p className="font-bold text-[18px] text-[var(--color-on-surface)]">{unit}호 입주민</p>
-            <p className="text-xs text-[var(--color-on-surface-variant)] mt-0.5">OO오피스텔</p>
+            <p className="text-xs text-[var(--color-on-surface-variant)] mt-0.5">
+              OO오피스텔 {role === 'admin' && <span className="text-[var(--color-primary)] font-semibold ml-1">관리자</span>}
+            </p>
           </div>
         </section>
 
@@ -142,28 +206,6 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {/* Notifications */}
-        <section>
-          <p className="text-xs font-bold text-[var(--color-on-surface-variant)] mb-2 px-1">알림</p>
-          <div className="bg-[var(--color-surface-container-lowest)] rounded-2xl border border-[var(--color-outline-variant)]/30 overflow-hidden divide-y divide-[var(--color-outline-variant)]/20">
-            <Row
-              icon="notifications_active"
-              label="푸시 알림"
-              right={<Toggle on={pushEnabled} onChange={setPushEnabled} />}
-            />
-            <Row
-              icon="event"
-              label="주차 만료 전 알림"
-              right={<Toggle on={expiryAlert} onChange={setExpiryAlert} />}
-            />
-            <Row
-              icon="report"
-              label="벌점 알림"
-              right={<Toggle on={penaltyAlert} onChange={setPenaltyAlert} />}
-            />
-          </div>
-        </section>
-
         {/* Account */}
         <section>
           <p className="text-xs font-bold text-[var(--color-on-surface-variant)] mb-2 px-1">계정</p>
@@ -172,9 +214,107 @@ export default function SettingsPage() {
             <Link href="/penalties">
               <Row icon="warning" label="벌점 / 이의제기" />
             </Link>
-            <Row icon="logout" label="로그아웃" danger onClick={handleLogout} />
+            <Row icon="logout" label="로그아웃" danger onClick={() => setShowLogoutConfirm(true)} />
           </div>
         </section>
+
+        {/* Account management — admin only */}
+        {role === 'admin' && (
+          <section>
+            <p className="text-xs font-bold text-[var(--color-on-surface-variant)] mb-2 px-1">계정 관리</p>
+            <div className="bg-[var(--color-surface-container-lowest)] rounded-2xl border border-[var(--color-outline-variant)]/30 overflow-hidden divide-y divide-[var(--color-outline-variant)]/20">
+              <div className="p-4 flex items-center gap-3">
+                <span className="material-symbols-outlined text-[22px] text-[var(--color-primary)]">apartment</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="호수 입력 (예: 101, 1001)"
+                  value={pwResetUnit}
+                  onChange={(e) => { setPwResetUnit(e.target.value.replace(/\D/g, '')); setPwResetResult(null); }}
+                  className="flex-1 text-sm text-[var(--color-on-surface)] bg-transparent outline-none
+                    placeholder:text-[var(--color-outline)]"
+                />
+              </div>
+              <button
+                onClick={handlePasswordReset}
+                disabled={pwResetLoading}
+                className="w-full flex items-center justify-between p-4 active:bg-[var(--color-surface-container)] text-left disabled:opacity-60"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="material-symbols-outlined text-[22px] text-[var(--color-primary)]">lock_reset</span>
+                  <span className="text-base text-[var(--color-on-surface)]">비밀번호 초기화</span>
+                </div>
+                {pwResetLoading
+                  ? <span className="w-5 h-5 border-2 border-[var(--color-primary)]/30 border-t-[var(--color-primary)] rounded-full animate-spin" />
+                  : <span className="material-symbols-outlined text-[var(--color-outline-variant)]">chevron_right</span>}
+              </button>
+              {pwResetResult && (
+                <div className="px-4 py-3 bg-[var(--color-success)]/8 flex items-center gap-3">
+                  <span className="material-symbols-outlined text-[var(--color-success)] text-[20px]"
+                    style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+                  <div>
+                    <p className="text-xs text-[var(--color-on-surface-variant)]">초기화된 비밀번호</p>
+                    <p className="font-bold text-base text-[var(--color-on-surface)] tracking-widest">{pwResetResult}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+            <p className="text-[11px] text-[var(--color-outline)] mt-2 px-1">
+              초기화 비밀번호: 호수 4자리 + 00 (101호 → 010100, 1001호 → 100100)
+            </p>
+          </section>
+        )}
+
+        {/* Demo management — admin only */}
+        {role === 'admin' && (
+          <section>
+            <p className="text-xs font-bold text-[var(--color-on-surface-variant)] mb-2 px-1">데모 관리</p>
+            <div className="bg-[var(--color-surface-container-lowest)] rounded-2xl border border-[var(--color-outline-variant)]/30 overflow-hidden divide-y divide-[var(--color-outline-variant)]/20">
+              {/* Target unit input */}
+              <div className="p-4 flex items-center gap-3">
+                <span className="material-symbols-outlined text-[22px] text-[var(--color-primary)]">apartment</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="대상 호수 입력 (예: 1001, 비우면 내 계정)"
+                  value={demoUnit}
+                  onChange={(e) => setDemoUnit(e.target.value.replace(/\D/g, ''))}
+                  className="flex-1 text-sm text-[var(--color-on-surface)] bg-transparent outline-none
+                    placeholder:text-[var(--color-outline)]"
+                />
+              </div>
+              <button
+                onClick={handleSeedDemo}
+                disabled={!!demoLoading}
+                className="w-full flex items-center justify-between p-4 active:bg-[var(--color-surface-container)] text-left disabled:opacity-60"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="material-symbols-outlined text-[22px] text-[var(--color-primary)]">dataset</span>
+                  <span className="text-base text-[var(--color-on-surface)]">데모 데이터 채우기</span>
+                </div>
+                {demoLoading === 'seed'
+                  ? <span className="w-5 h-5 border-2 border-[var(--color-primary)]/30 border-t-[var(--color-primary)] rounded-full animate-spin" />
+                  : <span className="material-symbols-outlined text-[var(--color-outline-variant)]">chevron_right</span>}
+              </button>
+              <button
+                onClick={handleResetDemo}
+                disabled={!!demoLoading}
+                className="w-full flex items-center justify-between p-4 active:bg-[var(--color-surface-container)] text-left disabled:opacity-60"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="material-symbols-outlined text-[22px] text-[var(--color-error)]">delete_sweep</span>
+                  <span className="text-base text-[var(--color-error)]">데이터 전체 초기화</span>
+                </div>
+                {demoLoading === 'reset'
+                  ? <span className="w-5 h-5 border-2 border-[var(--color-error)]/30 border-t-[var(--color-error)] rounded-full animate-spin" />
+                  : <span className="material-symbols-outlined text-[var(--color-outline-variant)]">chevron_right</span>}
+              </button>
+            </div>
+            <p className="text-[11px] text-[var(--color-outline)] mt-2 px-1">
+              호수를 입력하면 해당 계정에 데모 데이터(방문등록 7건·즐겨찾기 3개·벌점 이력)를 생성합니다.
+            </p>
+          </section>
+        )}
 
         {/* Help */}
         <section>
@@ -182,7 +322,7 @@ export default function SettingsPage() {
           <div className="bg-[var(--color-surface-container-lowest)] rounded-2xl border border-[var(--color-outline-variant)]/30 overflow-hidden divide-y divide-[var(--color-outline-variant)]/20">
             <Row icon="menu_book" label="사용자 가이드" onClick={() => show('준비 중입니다.', 'info')} />
             <Row icon="quiz" label="자주 묻는 질문" onClick={() => show('준비 중입니다.', 'info')} />
-            <Row icon="support_agent" label="고객센터 문의" onClick={() => show('관리사무소: 010-XXXX-XXXX', 'info')} />
+            <Row icon="support_agent" label="고객센터 문의" onClick={() => show(`관리사무소: ${process.env.NEXT_PUBLIC_OFFICE_PHONE ?? '관리사무소'}`, 'info')} />
           </div>
         </section>
 
@@ -194,6 +334,53 @@ export default function SettingsPage() {
       </main>
 
       <BottomNav />
+
+      {/* 로그아웃 확인 시트 */}
+      {showLogoutConfirm && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/50 z-50 backdrop-blur-sm"
+            onClick={() => setShowLogoutConfirm(false)}
+          />
+          <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-50
+            bg-[var(--color-surface)] rounded-t-3xl shadow-2xl px-5 pt-6 pb-10
+            animate-[slideUp_0.25s_ease-out]">
+            <div className="flex justify-center mb-5">
+              <div className="w-10 h-1 rounded-full bg-[var(--color-outline-variant)]" />
+            </div>
+            <div className="flex flex-col items-center gap-2 mb-7">
+              <div className="w-14 h-14 rounded-full bg-[var(--color-error)]/10
+                flex items-center justify-center mb-1">
+                <span className="material-symbols-outlined text-[var(--color-error)] text-[28px]">logout</span>
+              </div>
+              <h4 className="text-[18px] font-bold text-[var(--color-on-surface)]">로그아웃</h4>
+              <p className="text-sm text-[var(--color-on-surface-variant)] text-center">
+                로그아웃 하시겠습니까?<br />다시 로그인하려면 비밀번호가 필요합니다.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowLogoutConfirm(false)}
+                disabled={logoutLoading}
+                className="flex-1 h-14 rounded-2xl bg-[var(--color-surface-container-high)]
+                  text-[var(--color-on-surface-variant)] font-semibold active:scale-95 transition-transform disabled:opacity-60"
+              >
+                취소
+              </button>
+              <button
+                onClick={confirmLogout}
+                disabled={logoutLoading}
+                className="flex-[1.5] h-14 rounded-2xl bg-[var(--color-error)] text-white font-bold
+                  flex items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-70"
+              >
+                {logoutLoading
+                  ? <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  : '로그아웃'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

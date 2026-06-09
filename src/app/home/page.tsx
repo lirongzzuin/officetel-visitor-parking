@@ -1,32 +1,85 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
 import { BottomNav } from '@/components/BottomNav';
-import {
-  getAuthUnit, MOCK_VISITORS, MOCK_FAVORITES, CURRENT_PENALTY_SCORE, MAX_PENALTY,
-  isNightHours, DAILY_QUOTA, VisitorEntry,
-} from '@/lib/store';
-import { formatPlate } from '@/lib/plate';
+import { NotificationSheet } from '@/components/NotificationSheet';
+import { getAuthUnit, isNightHours, clearAuth } from '@/lib/store';
+import { apiFetch } from '@/lib/api-client';
+
+const DAILY_QUOTA = parseInt(process.env.NEXT_PUBLIC_DAILY_QUOTA ?? '10');
+const MAX_PENALTY = parseInt(process.env.NEXT_PUBLIC_PENALTY_LIMIT ?? '10');
+
+interface VisitorReg {
+  id: string;
+  plate_display: string;
+  nickname: string | null;
+  valid_date: string;
+  status: string;
+}
+
+interface Favorite {
+  id: string;
+  plate_display: string;
+  plate_normalized: string;
+  nickname: string;
+  emoji: string;
+}
 
 export default function HomePage() {
   const router = useRouter();
   const [unit, setUnit] = useState('');
-  const [todayVisitors, setTodayVisitors] = useState<VisitorEntry[]>([]);
+  const [todayVisitors, setTodayVisitors] = useState<VisitorReg[]>([]);
+  const [favorites, setFavorites] = useState<Favorite[]>([]);
+  const [penaltyScore, setPenaltyScore] = useState(0);
   const [isNight, setIsNight] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [cancelId, setCancelId] = useState<string | null>(null);
+  const [cancelLoading, setCancelLoading] = useState(false);
+
+  const loadData = useCallback(async () => {
+    try {
+      const data = await apiFetch<{
+        visitors: VisitorReg[];
+        favorites: Favorite[];
+        penalty_points: number;
+      }>('/api/home');
+      setTodayVisitors(data.visitors);
+      setFavorites(data.favorites);
+      setPenaltyScore(data.penalty_points ?? 0);
+    } catch (e: unknown) {
+      if ((e as Error & { status?: number }).status === 401) { clearAuth(); router.replace('/'); }
+    } finally {
+      setLoading(false);
+    }
+  }, [router]);
 
   useEffect(() => {
     const u = getAuthUnit();
-    if (!u) { router.replace('/'); return; }
+    if (!u) { clearAuth(); router.replace('/'); return; }
     setUnit(u);
-    const today = new Date().toISOString().split('T')[0];
-    setTodayVisitors(MOCK_VISITORS.filter((v) => v.unit === u && v.date === today));
     setIsNight(isNightHours());
-  }, [router]);
+    loadData();
+  }, [router, loadData]);
 
-  const score = Math.max(0, CURRENT_PENALTY_SCORE);
+  async function confirmCancel() {
+    if (!cancelId) return;
+    setCancelLoading(true);
+    try {
+      await apiFetch(`/api/visitors/${cancelId}`, { method: 'DELETE' });
+      setTodayVisitors((prev) => prev.filter((v) => v.id !== cancelId));
+    } catch {
+      // silent — user stays on page
+    } finally {
+      setCancelLoading(false);
+      setCancelId(null);
+    }
+  }
+
+  const score = Math.max(0, penaltyScore);
   const penaltyPct = score / MAX_PENALTY;
   const circumference = 2 * Math.PI * 34;
   const offset = circumference * (1 - penaltyPct);
@@ -41,7 +94,11 @@ export default function HomePage() {
 
   return (
     <div className="min-h-dvh bg-[var(--color-background)]">
-      <AppHeader />
+      <AppHeader
+        notificationDot={penaltyScore > 0}
+        onNotificationTap={() => setShowNotifications(true)}
+      />
+      <NotificationSheet open={showNotifications} onClose={() => setShowNotifications(false)} />
 
       <main className="pt-20 pb-28 px-5 space-y-6">
         {/* Greeting */}
@@ -72,12 +129,12 @@ export default function HomePage() {
           </Link>
         </section>
 
-        {/* Action Grid — lookup & report (night-aware) */}
+        {/* Action Grid */}
         <section className="grid grid-cols-2 gap-3">
           <Link href="/lookup">
             <div className="bg-[var(--color-surface-container-lowest)] p-5 rounded-2xl
               border border-[var(--color-outline-variant)]/40 shadow-sm flex flex-col gap-3
-              active:scale-[0.98] transition-transform relative overflow-hidden">
+              active:scale-[0.98] transition-transform">
               <div className="bg-[var(--color-primary)]/8 w-10 h-10 rounded-xl flex items-center justify-center text-[var(--color-primary)]">
                 <span className="material-symbols-outlined text-[22px]">manage_search</span>
               </div>
@@ -122,7 +179,11 @@ export default function HomePage() {
             </Link>
           </div>
 
-          {todayVisitors.length === 0 ? (
+          {loading ? (
+            <div className="flex justify-center py-8">
+              <span className="w-6 h-6 border-2 border-[var(--color-primary)]/30 border-t-[var(--color-primary)] rounded-full animate-spin" />
+            </div>
+          ) : todayVisitors.length === 0 ? (
             <div className="bg-[var(--color-surface-container-lowest)] rounded-2xl p-6 text-center
               border border-[var(--color-outline-variant)]/30">
               <span className="material-symbols-outlined text-[var(--color-outline)] text-[40px] mb-2 block">
@@ -148,7 +209,7 @@ export default function HomePage() {
                         <span className="bg-[var(--color-primary)]/10 text-[var(--color-primary)]
                           text-[11px] font-bold px-2 py-0.5 rounded-md">방문중</span>
                         <span className="font-bold text-[18px] text-[var(--color-on-surface)] plate-mono">
-                          {formatPlate(v.plate)}
+                          {v.plate_display}
                         </span>
                       </div>
                       {v.nickname && (
@@ -159,8 +220,10 @@ export default function HomePage() {
                         06:00 – 18:00
                       </p>
                     </div>
-                    <button className="text-xs text-[var(--color-error)] border border-[var(--color-error)]/20
-                      bg-[var(--color-error)]/5 px-3 py-1.5 rounded-lg font-semibold active:scale-95 transition-transform">
+                    <button
+                      onClick={() => setCancelId(v.id)}
+                      className="text-xs text-[var(--color-error)] border border-[var(--color-error)]/20
+                        bg-[var(--color-error)]/5 px-3 py-1.5 rounded-lg font-semibold active:scale-95 transition-transform">
                       취소
                     </button>
                   </div>
@@ -184,21 +247,23 @@ export default function HomePage() {
         </section>
 
         {/* Frequent vehicles */}
-        <section>
-          <h3 className="text-[18px] font-bold text-[var(--color-on-surface)] mb-3">자주 오는 차량</h3>
-          <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
-            {MOCK_FAVORITES.map((f) => (
-              <Link key={f.id} href={`/register?plate=${encodeURIComponent(f.plate)}&nickname=${encodeURIComponent(f.nickname)}`}>
-                <div className="whitespace-nowrap bg-[var(--color-on-surface)] text-[var(--color-surface)]
-                  px-4 py-2.5 rounded-full text-sm font-semibold flex items-center gap-1.5
-                  active:scale-95 transition-transform shrink-0">
-                  <span>{f.emoji}</span>
-                  <span className="plate-mono">{formatPlate(f.plate)}</span>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </section>
+        {favorites.length > 0 && (
+          <section>
+            <h3 className="text-[18px] font-bold text-[var(--color-on-surface)] mb-3">자주 오는 차량</h3>
+            <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+              {favorites.map((f) => (
+                <Link key={f.id} href={`/register?plate=${encodeURIComponent(f.plate_display)}&nickname=${encodeURIComponent(f.nickname)}`}>
+                  <div className="whitespace-nowrap bg-[var(--color-on-surface)] text-[var(--color-surface)]
+                    px-4 py-2.5 rounded-full text-sm font-semibold flex items-center gap-1.5
+                    active:scale-95 transition-transform shrink-0">
+                    <span>{f.emoji}</span>
+                    <span className="plate-mono">{f.plate_display}</span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Penalty status */}
         <section className="bg-[var(--color-surface-container-lowest)] rounded-2xl p-5
@@ -212,7 +277,6 @@ export default function HomePage() {
             </Link>
           </div>
           <div className="flex items-center gap-5">
-            {/* Gauge */}
             <div className="relative w-20 h-20 shrink-0">
               <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 80 80">
                 <circle cx="40" cy="40" r="34" fill="none"
@@ -244,6 +308,42 @@ export default function HomePage() {
       </main>
 
       <BottomNav />
+
+      {cancelId && (
+        <>
+          <div className="fixed inset-0 bg-black/50 z-50 backdrop-blur-sm" onClick={() => setCancelId(null)} />
+          <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-50
+            bg-[var(--color-surface)] rounded-t-3xl shadow-2xl px-5 pt-6 pb-10
+            animate-[slideUp_0.25s_ease-out]">
+            <div className="flex justify-center mb-5">
+              <div className="w-10 h-1 rounded-full bg-[var(--color-outline-variant)]" />
+            </div>
+            <div className="flex flex-col items-center gap-2 mb-7">
+              <div className="w-14 h-14 rounded-full bg-[var(--color-error)]/10 flex items-center justify-center mb-1">
+                <span className="material-symbols-outlined text-[var(--color-error)] text-[28px]">cancel</span>
+              </div>
+              <h4 className="text-[18px] font-bold text-[var(--color-on-surface)]">등록 취소</h4>
+              <p className="text-sm text-[var(--color-on-surface-variant)] text-center">
+                해당 차량의 방문 등록을 취소하시겠습니까?
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setCancelId(null)} disabled={cancelLoading}
+                className="flex-1 h-14 rounded-2xl bg-[var(--color-surface-container-high)]
+                  text-[var(--color-on-surface-variant)] font-semibold active:scale-95 transition-transform disabled:opacity-60">
+                돌아가기
+              </button>
+              <button onClick={confirmCancel} disabled={cancelLoading}
+                className="flex-[1.5] h-14 rounded-2xl bg-[var(--color-error)] text-white font-bold
+                  flex items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-70">
+                {cancelLoading
+                  ? <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  : '등록취소'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

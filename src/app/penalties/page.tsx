@@ -1,17 +1,38 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { AppHeader } from '@/components/AppHeader';
 import { BottomNav } from '@/components/BottomNav';
 import { useToast } from '@/components/Toast';
-import { MOCK_PENALTIES, CURRENT_PENALTY_SCORE, MAX_PENALTY, getAuthUnit, PenaltyEntry } from '@/lib/store';
+import { getAuthUnit, clearAuth } from '@/lib/store';
+import { apiFetch } from '@/lib/api-client';
+
+const MAX_PENALTY = parseInt(process.env.NEXT_PUBLIC_PENALTY_LIMIT ?? '10');
+
+interface PenaltyEntry {
+  id: string;
+  points: number;
+  type: 'penalty' | 'reduction' | 'expired';
+  reason: string;
+  detail: string | null;
+  created_at: string;
+  disputes: Array<{ id: string; status: string; created_at: string }>;
+}
 
 type DisputeReason = '오인 신고' | '긴급 상황' | '기타';
+type DisputeStatus = 'none' | 'pending' | 'approved' | 'rejected';
+
+function getDisputeStatus(entry: PenaltyEntry): DisputeStatus {
+  if (!entry.disputes || entry.disputes.length === 0) return 'none';
+  return entry.disputes[0].status as DisputeStatus;
+}
 
 export default function PenaltiesPage() {
   const router = useRouter();
+  const [penalties, setPenalties] = useState<PenaltyEntry[]>([]);
   const [score, setScore] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<PenaltyEntry | null>(null);
   const [disputeReason, setDisputeReason] = useState<DisputeReason>('오인 신고');
@@ -20,10 +41,25 @@ export default function PenaltiesPage() {
   const backdropRef = useRef<HTMLDivElement>(null);
   const { show, toastEl } = useToast();
 
+  const load = useCallback(async () => {
+    try {
+      const [data, me] = await Promise.all([
+        apiFetch<PenaltyEntry[]>('/api/penalties'),
+        apiFetch<{ penalty_points: number }>('/api/auth/me'),
+      ]);
+      setPenalties(data);
+      setScore(Math.max(0, me.penalty_points ?? 0));
+    } catch {
+      show('데이터를 불러오지 못했습니다', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (!getAuthUnit()) { router.replace('/'); return; }
-    setScore(Math.max(0, CURRENT_PENALTY_SCORE));
-  }, [router]);
+    if (!getAuthUnit()) { clearAuth(); router.replace('/'); return; }
+    load();
+  }, [router, load]);
 
   const circumference = 2 * Math.PI * 70;
   const fillRatio = score / MAX_PENALTY;
@@ -35,7 +71,7 @@ export default function PenaltiesPage() {
     : score < 5 ? 'bg-yellow-50 text-yellow-700'
     : 'bg-[var(--color-error-container)] text-[var(--color-error)]';
 
-  const totalPenalty = MOCK_PENALTIES.filter((p) => p.points > 0).reduce((s, p) => s + p.points, 0);
+  const totalPenalty = penalties.filter((p) => p.points > 0).reduce((s, p) => s + p.points, 0);
   const nextRestriction = score >= 5 ? `벌점 ${MAX_PENALTY - score}점 더 받으면 이용 제한` : null;
 
   function openDispute(entry: PenaltyEntry) {
@@ -50,17 +86,35 @@ export default function PenaltiesPage() {
     setSelectedEntry(null);
   }
 
-  function submitDispute() {
+  async function submitDispute() {
     if (disputeDetail.length < 10) {
       show('사유를 10자 이상 입력해주세요.', 'error');
       return;
     }
+    if (!selectedEntry) return;
     setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
+    try {
+      await apiFetch('/api/disputes', {
+        method: 'POST',
+        body: JSON.stringify({
+          penalty_history_id: selectedEntry.id,
+          reason: `[${disputeReason}] ${disputeDetail}`,
+        }),
+      });
       closeSheet();
       show('이의제기가 접수되었습니다. 영업일 1-2일 내 결과를 알려드립니다.', 'success');
-    }, 800);
+      // Optimistically update local state
+      setPenalties((prev) =>
+        prev.map((p) => p.id === selectedEntry.id
+          ? { ...p, disputes: [{ id: 'new', status: 'pending', created_at: new Date().toISOString() }] }
+          : p
+        )
+      );
+    } catch (e: unknown) {
+      show((e as Error).message ?? '이의제기 접수에 실패했습니다.', 'error');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const reasons: DisputeReason[] = ['오인 신고', '긴급 상황', '기타'];
@@ -74,7 +128,6 @@ export default function PenaltiesPage() {
         {/* Status card */}
         <section className="bg-[var(--color-surface-container-lowest)] rounded-3xl p-6 shadow-sm border border-[var(--color-outline-variant)]/20">
           <div className="flex flex-col items-center">
-            {/* Gauge */}
             <div className="relative w-44 h-44 flex items-center justify-center mb-5">
               <svg className="w-full h-full" viewBox="0 0 160 160">
                 <circle cx="80" cy="80" r="70" fill="none"
@@ -125,7 +178,6 @@ export default function PenaltiesPage() {
             </div>
           </div>
 
-          {/* Restriction notice if applicable */}
           {score >= MAX_PENALTY && (
             <div className="mt-4 bg-[var(--color-error-container)] rounded-2xl p-4 flex items-center gap-3">
               <span className="material-symbols-outlined text-[var(--color-error)] text-[24px]"
@@ -145,101 +197,114 @@ export default function PenaltiesPage() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <h3 className="text-[18px] font-bold text-[var(--color-on-surface)]">벌점 변동 내역</h3>
-              <span className="bg-[var(--color-surface-container-high)] text-[var(--color-on-surface-variant)]
-                text-[11px] px-2 py-0.5 rounded-full font-bold">
-                {MOCK_PENALTIES.length}건
-              </span>
+              {!loading && (
+                <span className="bg-[var(--color-surface-container-high)] text-[var(--color-on-surface-variant)]
+                  text-[11px] px-2 py-0.5 rounded-full font-bold">
+                  {penalties.length}건
+                </span>
+              )}
             </div>
           </div>
 
-          <div className="relative space-y-4">
-            {/* Timeline connector */}
-            <div className="absolute left-[19px] top-5 bottom-5 w-px bg-[var(--color-outline-variant)]/40" />
+          {loading ? (
+            <div className="flex justify-center py-8">
+              <span className="w-6 h-6 border-2 border-[var(--color-primary)]/30 border-t-[var(--color-primary)] rounded-full animate-spin" />
+            </div>
+          ) : penalties.length === 0 ? (
+            <div className="text-center py-12">
+              <span className="material-symbols-outlined text-[var(--color-outline)] text-[48px] mb-3 block"
+                style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+              <p className="text-[var(--color-on-surface-variant)]">벌점 내역이 없습니다</p>
+            </div>
+          ) : (
+            <div className="relative space-y-4">
+              <div className="absolute left-[19px] top-5 bottom-5 w-px bg-[var(--color-outline-variant)]/40" />
 
-            {MOCK_PENALTIES.map((entry) => {
-              const isPenalty = entry.points > 0;
-              const iconColor = isPenalty
-                ? 'text-[var(--color-error)]'
-                : entry.type === 'reduction' ? 'text-[var(--color-success)]'
-                : 'text-[var(--color-on-surface-variant)]';
-              const iconBg = isPenalty
-                ? 'bg-[var(--color-error-container)]'
-                : entry.type === 'reduction' ? 'bg-[var(--color-success-light)]'
-                : 'bg-[var(--color-surface-container-high)]';
+              {penalties.map((entry) => {
+                const isPenalty = entry.points > 0;
+                const disputeStatus = getDisputeStatus(entry);
+                const iconColor = isPenalty ? 'text-[var(--color-error)]'
+                  : entry.type === 'reduction' ? 'text-[var(--color-success)]'
+                  : 'text-[var(--color-on-surface-variant)]';
+                const iconBg = isPenalty ? 'bg-[var(--color-error-container)]'
+                  : entry.type === 'reduction' ? 'bg-[var(--color-success-light)]'
+                  : 'bg-[var(--color-surface-container-high)]';
 
-              return (
-                <div key={entry.id} className="relative z-10 flex gap-4 pl-1">
-                  <div className="shrink-0 pt-2">
-                    <div className={`w-9 h-9 rounded-full ${iconBg} ${iconColor}
-                      flex items-center justify-center border-2 border-[var(--color-background)] shadow-sm`}>
-                      <span className="material-symbols-outlined text-[18px]"
-                        style={{ fontVariationSettings: isPenalty ? "'FILL' 1" : "'FILL' 0" }}>
-                        {isPenalty ? 'warning' : entry.type === 'reduction' ? 'verified' : 'history'}
-                      </span>
+                return (
+                  <div key={entry.id} className="relative z-10 flex gap-4 pl-1">
+                    <div className="shrink-0 pt-2">
+                      <div className={`w-9 h-9 rounded-full ${iconBg} ${iconColor}
+                        flex items-center justify-center border-2 border-[var(--color-background)] shadow-sm`}>
+                        <span className="material-symbols-outlined text-[18px]"
+                          style={{ fontVariationSettings: isPenalty ? "'FILL' 1" : "'FILL' 0" }}>
+                          {isPenalty ? 'warning' : entry.type === 'reduction' ? 'verified' : 'history'}
+                        </span>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="flex-1 bg-[var(--color-surface-container-lowest)] rounded-2xl p-4 shadow-sm
-                    border border-[var(--color-outline-variant)]/20">
-                    <div className="flex justify-between items-start mb-1.5">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md
-                            ${isPenalty ? 'bg-[var(--color-error-container)] text-[var(--color-error)]'
-                              : 'bg-[var(--color-success-light)] text-[var(--color-success)]'}`}>
-                            {isPenalty ? '벌점 부과' : '벌점 감면'}
-                          </span>
-                          <span className="text-[11px] text-[var(--color-on-surface-variant)]">{entry.date}</span>
+                    <div className="flex-1 bg-[var(--color-surface-container-lowest)] rounded-2xl p-4 shadow-sm
+                      border border-[var(--color-outline-variant)]/20">
+                      <div className="flex justify-between items-start mb-1.5">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md
+                              ${isPenalty ? 'bg-[var(--color-error-container)] text-[var(--color-error)]'
+                                : 'bg-[var(--color-success-light)] text-[var(--color-success)]'}`}>
+                              {isPenalty ? '벌점 부과' : '벌점 감면'}
+                            </span>
+                            <span className="text-[11px] text-[var(--color-on-surface-variant)]">
+                              {new Date(entry.created_at).toLocaleDateString('ko-KR')}
+                            </span>
+                          </div>
+                          <p className="font-semibold text-[var(--color-on-surface)]">{entry.reason}</p>
                         </div>
-                        <p className="font-semibold text-[var(--color-on-surface)]">{entry.reason}</p>
+                        <span className={`font-bold text-[18px] ${isPenalty ? 'text-[var(--color-error)]' : 'text-[var(--color-success)]'}`}>
+                          {entry.points > 0 ? '+' : ''}{entry.points}점
+                        </span>
                       </div>
-                      <span className={`font-bold text-[18px] ${isPenalty ? 'text-[var(--color-error)]' : 'text-[var(--color-success)]'}`}>
-                        {entry.points > 0 ? '+' : ''}{entry.points}점
-                      </span>
+
+                      {entry.detail && (
+                        <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed mb-3 mt-2
+                          bg-[var(--color-surface-container-low)] p-2.5 rounded-xl">
+                          {entry.detail}
+                        </p>
+                      )}
+
+                      {isPenalty && disputeStatus === 'none' && (
+                        <button
+                          onClick={() => openDispute(entry)}
+                          className="w-full text-[var(--color-primary)] font-semibold text-sm
+                            bg-[var(--color-primary)]/5 border border-[var(--color-primary)]/15
+                            rounded-xl py-2.5 active:bg-[var(--color-primary)]/10 transition-colors"
+                        >
+                          이의제기 신청하기
+                        </button>
+                      )}
+                      {disputeStatus === 'pending' && (
+                        <div className="bg-[var(--color-surface-container-low)] rounded-xl p-3 flex items-center gap-2">
+                          <span className="material-symbols-outlined text-[var(--color-primary)] text-[16px]">pending</span>
+                          <span className="text-xs text-[var(--color-on-surface-variant)] font-medium">이의제기 검토중</span>
+                        </div>
+                      )}
+                      {disputeStatus === 'rejected' && (
+                        <div className="bg-[var(--color-surface-container-low)] rounded-xl p-3 flex items-center gap-2">
+                          <span className="material-symbols-outlined text-[var(--color-outline)] text-[16px]">info</span>
+                          <span className="text-xs text-[var(--color-on-surface-variant)]">이의제기 처리완료 (기각됨)</span>
+                        </div>
+                      )}
+                      {disputeStatus === 'approved' && (
+                        <div className="bg-[var(--color-success-light)] rounded-xl p-3 flex items-center gap-2">
+                          <span className="material-symbols-outlined text-[var(--color-success)] text-[16px]"
+                            style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+                          <span className="text-xs text-[var(--color-success)] font-medium">이의제기 승인 — 벌점 취소됨</span>
+                        </div>
+                      )}
                     </div>
-
-                    {entry.detail && (
-                      <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed mb-3 mt-2
-                        bg-[var(--color-surface-container-low)] p-2.5 rounded-xl">
-                        {entry.detail}
-                      </p>
-                    )}
-
-                    {/* Dispute button or status */}
-                    {isPenalty && entry.disputeStatus === 'none' && (
-                      <button
-                        onClick={() => openDispute(entry)}
-                        className="w-full text-[var(--color-primary)] font-semibold text-sm
-                          bg-[var(--color-primary)]/5 border border-[var(--color-primary)]/15
-                          rounded-xl py-2.5 active:bg-[var(--color-primary)]/10 transition-colors"
-                      >
-                        이의제기 신청하기
-                      </button>
-                    )}
-                    {entry.disputeStatus === 'pending' && (
-                      <div className="bg-[var(--color-surface-container-low)] rounded-xl p-3 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-[var(--color-primary)] text-[16px]">pending</span>
-                        <span className="text-xs text-[var(--color-on-surface-variant)] font-medium">이의제기 검토중</span>
-                      </div>
-                    )}
-                    {entry.disputeStatus === 'rejected' && (
-                      <div className="bg-[var(--color-surface-container-low)] rounded-xl p-3 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-[var(--color-outline)] text-[16px]">info</span>
-                        <span className="text-xs text-[var(--color-on-surface-variant)]">이의제기 처리완료 (기각됨)</span>
-                      </div>
-                    )}
-                    {entry.disputeStatus === 'approved' && (
-                      <div className="bg-[var(--color-success-light)] rounded-xl p-3 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-[var(--color-success)] text-[16px]"
-                          style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
-                        <span className="text-xs text-[var(--color-success)] font-medium">이의제기 승인 — 벌점 취소됨</span>
-                      </div>
-                    )}
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </section>
       </main>
 
@@ -249,7 +314,7 @@ export default function PenaltiesPage() {
           <div
             ref={backdropRef}
             onClick={closeSheet}
-            className="fixed inset-0 bg-black/60 z-[60] transition-opacity"
+            className="fixed inset-0 bg-black/60 z-[60]"
           />
           <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-[70]
             bg-[var(--color-surface)] rounded-t-[32px] shadow-2xl sheet-enter max-h-[90dvh] overflow-y-auto">
@@ -311,24 +376,6 @@ export default function PenaltiesPage() {
                 <p className={`text-xs mt-1 text-right ${disputeDetail.length >= 10 ? 'text-[var(--color-success)]' : 'text-[var(--color-outline)]'}`}>
                   {disputeDetail.length}자
                 </p>
-              </div>
-
-              {/* Photo upload */}
-              <div>
-                <label className="text-sm font-bold text-[var(--color-on-surface)] mb-2 block">증빙 자료 업로드</label>
-                <button className="group w-full py-6 border-2 border-dashed border-[var(--color-outline-variant)]/60
-                  rounded-2xl flex flex-col items-center justify-center gap-2
-                  hover:border-[var(--color-primary)]/50 hover:bg-[var(--color-primary)]/3 transition-all">
-                  <div className="w-12 h-12 rounded-full bg-[var(--color-surface-container-high)]
-                    flex items-center justify-center group-hover:bg-[var(--color-primary)]/10">
-                    <span className="material-symbols-outlined text-[var(--color-on-surface-variant)] text-[28px]
-                      group-hover:text-[var(--color-primary)]">add_a_photo</span>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-sm font-semibold text-[var(--color-on-surface)]">사진 첨부하기</p>
-                    <p className="text-xs text-[var(--color-on-surface-variant)]/60">블랙박스, 현장 사진 등 (최대 3장)</p>
-                  </div>
-                </button>
               </div>
 
               {/* Actions */}

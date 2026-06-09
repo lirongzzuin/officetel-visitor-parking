@@ -2,6 +2,7 @@
   "CLOUD_API_BASE":       "https://your-app.vercel.app",
   "AGENT_TOKEN":          "여기에_관리자가_발급한_토큰_입력",
   "GITHUB_REPO":          "lirongzzuin/officetel-visitor-parking",
+  "GITHUB_TOKEN":         "여기에_GitHub_PAT_입력",
 
   "CARTAN_SCENARIO":      "S2",
   "CARTAN_DRY_RUN":       "true",

@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 const items = [
   { href: '/home', icon: 'home', label: '홈' },
   { href: '/register', icon: 'add_circle', label: '등록' },
+  { href: '/notices', icon: 'newspaper', label: '소식' },
   { href: '/lookup', icon: 'manage_search', label: '조회' },
   { href: '/settings', icon: 'person', label: '내정보' },
 ];

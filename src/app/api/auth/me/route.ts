@@ -23,7 +23,9 @@ export async function GET(req: NextRequest) {
       .eq('account_id', user.id)
       .eq('valid_date', today)
       .eq('status', 'active'),
-  ]);
+  ]).catch(() => [{ data: null }, { count: 0 }] as const);
+
+  if (!account) return err('NOT_FOUND', '계정 정보를 불러올 수 없습니다', 500);
 
   return ok({
     id: user.id,

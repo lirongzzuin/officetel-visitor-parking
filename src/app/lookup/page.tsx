@@ -5,11 +5,12 @@ import { useRouter } from 'next/navigation';
 import { AppHeader } from '@/components/AppHeader';
 import { BottomNav } from '@/components/BottomNav';
 import { useToast } from '@/components/Toast';
-import { MOCK_VISITORS, isNightHours, getAuthUnit } from '@/lib/store';
-import { normalizePlate, formatPlate, samePlate } from '@/lib/plate';
+import { isNightHours, getAuthUnit, clearAuth } from '@/lib/store';
+import { liveFormat, formatPlate, normalizePlate } from '@/lib/plate';
+import { apiFetch } from '@/lib/api-client';
 
 interface SearchResult {
-  type: 'household' | 'visitor' | 'not_found';
+  type: 'visitor' | 'not_found';
   unit?: string;
   plate: string;
 }
@@ -17,7 +18,7 @@ interface SearchResult {
 interface RecentSearch {
   plate: string;
   time: string;
-  result: 'household' | 'visitor' | 'not_found';
+  result: 'visitor' | 'not_found';
 }
 
 export default function LookupPage() {
@@ -25,51 +26,53 @@ export default function LookupPage() {
   const [isNight, setIsNight] = useState(false);
   const [plate, setPlate] = useState('');
   const [result, setResult] = useState<SearchResult | null>(null);
+  const [searching, setSearching] = useState(false);
   const [recents, setRecents] = useState<RecentSearch[]>([]);
   const { show, toastEl } = useToast();
 
   useEffect(() => {
-    if (!getAuthUnit()) { router.replace('/'); return; }
+    if (!getAuthUnit()) { clearAuth(); router.replace('/'); return; }
     setIsNight(isNightHours());
     const saved = localStorage.getItem('officetel_lookup_history');
-    if (saved) setRecents(JSON.parse(saved));
+    if (saved) {
+      try { setRecents(JSON.parse(saved)); } catch { /* ignore */ }
+    }
   }, [router]);
 
-  function handleSearch() {
+  async function handleSearch() {
     if (!plate.trim()) return;
-    const norm = normalizePlate(plate);
-    const today = new Date().toISOString().split('T')[0];
+    setSearching(true);
+    setResult(null);
+    try {
+      const data = await apiFetch<{ kind: 'visitor' | 'unknown'; unit?: string; plate_display: string }>(
+        `/api/lookup?plate=${encodeURIComponent(normalizePlate(plate))}`
+      );
 
-    // Check today's registered visitors (normalize both sides)
-    const visitorMatch = MOCK_VISITORS.find(
-      (v) => v.date === today && samePlate(v.plate, plate)
-    );
+      const res: SearchResult = {
+        type: data.kind === 'visitor' ? 'visitor' : 'not_found',
+        unit: data.unit,
+        plate: data.plate_display ?? normalizePlate(plate),
+      };
 
-    // Check household vehicles (mock: '78너1234' belongs to unit 1001)
-    const householdPlates = ['78너1234'];
-    const isHousehold = householdPlates.some((hp) => samePlate(hp, plate));
+      setResult(res);
 
-    let res: SearchResult;
-    if (isHousehold) {
-      res = { type: 'household', plate: norm };
-    } else if (visitorMatch) {
-      res = { type: 'visitor', unit: visitorMatch.unit, plate: norm };
-    } else {
-      res = { type: 'not_found', plate: norm };
-      show('오늘 방문차량 현황에서 해당 번호를 찾을 수 없습니다.\n번호를 다시 확인해주세요.', 'warning');
+      if (res.type === 'not_found') {
+        show('오늘 방문차량 현황에서 해당 번호를 찾을 수 없습니다.\n번호를 다시 확인해주세요.', 'warning');
+      }
+
+      const entry: RecentSearch = {
+        plate: formatPlate(plate),
+        time: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
+        result: res.type,
+      };
+      const updated = [entry, ...recents.filter((r) => r.plate !== formatPlate(plate))].slice(0, 5);
+      setRecents(updated);
+      localStorage.setItem('officetel_lookup_history', JSON.stringify(updated));
+    } catch (e: unknown) {
+      show((e as Error).message ?? '조회에 실패했습니다', 'error');
+    } finally {
+      setSearching(false);
     }
-
-    setResult(res);
-
-    // Save to recent
-    const entry: RecentSearch = {
-      plate: formatPlate(plate),
-      time: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
-      result: res.type,
-    };
-    const updated = [entry, ...recents.filter((r) => !samePlate(r.plate, plate))].slice(0, 5);
-    setRecents(updated);
-    localStorage.setItem('officetel_lookup_history', JSON.stringify(updated));
   }
 
   function clearHistory() {
@@ -78,22 +81,13 @@ export default function LookupPage() {
   }
 
   const resultConfig = {
-    household: {
-      icon: 'verified_user',
-      iconColor: 'text-[var(--color-primary)]',
-      iconBg: 'bg-[var(--color-primary)]/10',
-      badge: '세대 등록',
-      badgeBg: 'bg-[var(--color-primary)] text-white',
-      message: '세대 등록 차량입니다',
-      sub: '24시간 입출차가 허용된 차량입니다.',
-    },
     visitor: {
       icon: 'check_circle',
       iconColor: 'text-[var(--color-success)]',
       iconBg: 'bg-[var(--color-success)]/10',
       badge: '등록 완료',
       badgeBg: 'bg-[var(--color-success)] text-white',
-      message: `${result?.unit ?? ''}호에서 방문 등록한 차량입니다`,
+      message: result?.unit ? `${result.unit}호에서 방문 등록한 차량입니다` : '방문 등록 차량입니다',
       sub: '오늘 06:00 – 18:00 입차 가능한 차량입니다.',
     },
     not_found: {
@@ -135,7 +129,6 @@ export default function LookupPage() {
       <AppHeader title="차량 조회" showBack onBack={() => router.back()} />
 
       <main className="pt-20 pb-28 px-5 space-y-6">
-        {/* Night hero */}
         {isNight && (
           <section className="relative overflow-hidden rounded-3xl h-44 flex flex-col justify-end p-6
             bg-[var(--color-inverse-surface)]">
@@ -157,7 +150,6 @@ export default function LookupPage() {
 
         {isNight && (
           <>
-            {/* Search */}
             <section className="space-y-3">
               <div className="relative">
                 <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined
@@ -167,7 +159,7 @@ export default function LookupPage() {
                   inputMode="text"
                   placeholder="12가 3456"
                   value={plate}
-                  onChange={(e) => setPlate(e.target.value.toUpperCase())}
+                  onChange={(e) => setPlate(liveFormat(e.target.value))}
                   onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                   maxLength={10}
                   className="w-full h-16 pl-12 pr-4 rounded-2xl border-2 border-[var(--color-outline-variant)]
@@ -180,16 +172,17 @@ export default function LookupPage() {
               </div>
               <button
                 onClick={handleSearch}
+                disabled={searching}
                 className="w-full h-14 bg-[var(--color-primary)] text-white rounded-2xl font-bold text-[17px]
                   flex items-center justify-center gap-2 active:scale-[0.98] transition-all
-                  shadow-lg shadow-[var(--color-primary)]/20"
+                  shadow-lg shadow-[var(--color-primary)]/20 disabled:opacity-70"
               >
-                <span className="material-symbols-outlined">search</span>
-                조회하기
+                {searching
+                  ? <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  : <><span className="material-symbols-outlined">search</span>조회하기</>}
               </button>
             </section>
 
-            {/* Result */}
             {result && (() => {
               const cfg = resultConfig[result.type];
               return (
@@ -210,7 +203,7 @@ export default function LookupPage() {
                       <div className="flex-1 space-y-1">
                         <div className="flex justify-between items-start">
                           <span className="text-[24px] font-bold text-[var(--color-on-surface)] plate-mono">
-                            {formatPlate(result.plate)}
+                            {result.plate}
                           </span>
                           <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${cfg.badgeBg}`}>
                             {cfg.badge}
@@ -251,7 +244,6 @@ export default function LookupPage() {
               );
             })()}
 
-            {/* Recent searches */}
             {recents.length > 0 && (
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -276,10 +268,9 @@ export default function LookupPage() {
                             {r.time} ·{' '}
                             <span className={
                               r.result === 'not_found' ? 'text-[var(--color-error)] font-semibold' :
-                              r.result === 'household' ? 'text-[var(--color-primary)]' :
                               'text-[var(--color-success)]'
                             }>
-                              {r.result === 'not_found' ? '미등록' : r.result === 'household' ? '세대차량' : '방문차량'}
+                              {r.result === 'not_found' ? '미등록' : '방문차량'}
                             </span>
                           </p>
                         </div>
@@ -298,7 +289,6 @@ export default function LookupPage() {
               </section>
             )}
 
-            {/* Tip */}
             <div className="bg-[var(--color-tertiary)]/5 border border-[var(--color-tertiary)]/10
               p-5 rounded-3xl flex gap-4 items-start">
               <div className="w-10 h-10 rounded-full bg-[var(--color-tertiary)]/10 flex items-center justify-center shrink-0">

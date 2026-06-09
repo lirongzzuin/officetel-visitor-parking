@@ -4,8 +4,8 @@ import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppHeader } from '@/components/AppHeader';
 import { useToast } from '@/components/Toast';
-import { MOCK_VISITORS, isNightHours, getAuthUnit } from '@/lib/store';
-import { liveFormat, normalizePlate, samePlate } from '@/lib/plate';
+import { isNightHours, getAuthUnit, clearAuth } from '@/lib/store';
+import { liveFormat } from '@/lib/plate';
 
 type SubmitState = 'idle' | 'loading' | 'registered_visitor' | 'unknown' | 'household';
 
@@ -21,7 +21,7 @@ function ReportForm() {
   const { show, toastEl } = useToast();
 
   useEffect(() => {
-    if (!getAuthUnit()) { router.replace('/'); return; }
+    if (!getAuthUnit()) { clearAuth(); router.replace('/'); return; }
     setIsNight(isNightHours());
   }, [router]);
 
@@ -32,42 +32,51 @@ function ReportForm() {
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const url = URL.createObjectURL(file);
-    setPhotoPreview(url);
+    setPhotoPreview(URL.createObjectURL(file));
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!plate.trim()) {
       show('차량번호를 입력해주세요.', 'error');
       return;
     }
-
     setSubmitState('loading');
-    const today = new Date().toISOString().split('T')[0];
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('officetel_token') : null;
+      const fd = new FormData();
+      fd.append('plate', plate);
+      if (memo) fd.append('memo', memo);
+      const photoFile = fileRef.current?.files?.[0];
+      if (photoFile) fd.append('photo', photoFile);
 
-    setTimeout(() => {
-      // Normalize and check against today's registered visitors
-      const visitorMatch = MOCK_VISITORS.find(
-        (v) => v.date === today && samePlate(v.plate, plate)
-      );
+      const res = await fetch('/api/reports', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        const e = new Error(json.message ?? '신고에 실패했습니다') as Error & { code?: string };
+        e.code = json.code;
+        throw e;
+      }
+      const data = (json.data ?? json) as { kind: 'visitor' | 'unknown'; unit?: string; banned?: boolean };
 
-      // Household check (mock data)
-      const householdPlates = ['78너1234'];
-      const isHousehold = householdPlates.some((hp) => samePlate(hp, plate));
-
-      if (isHousehold) {
-        setSubmitState('household');
-      } else if (visitorMatch) {
+      if (data.kind === 'visitor') {
         setSubmitState('registered_visitor');
       } else {
-        // Not in today's visitor list → show "cannot find" toast and proceed
-        show(
-          '오늘 방문차량 현황에서 해당 차량번호를 찾을 수 없습니다.\n번호를 다시 확인해주세요.',
-          'warning'
-        );
-        setTimeout(() => setSubmitState('unknown'), 1500);
+        setSubmitState('unknown');
       }
-    }, 700);
+    } catch (e: unknown) {
+      const err = e as Error & { code?: string };
+      if (err.code === 'TIME_RESTRICTED') {
+        setIsNight(false);
+        setSubmitState('idle');
+      } else {
+        show(err.message ?? '신고에 실패했습니다', 'error');
+        setSubmitState('idle');
+      }
+    }
   }
 
   const daytimeScreen = (
@@ -83,38 +92,6 @@ function ReportForm() {
       </p>
     </div>
   );
-
-  // Post-submit results
-  if (submitState === 'household') {
-    return (
-      <div className="min-h-dvh bg-[var(--color-background)]">
-        <AppHeader title="신고하기" showBack onBack={() => setSubmitState('idle')} />
-        <main className="pt-20 pb-28 px-5 flex flex-col items-center justify-center min-h-[70dvh] text-center">
-          <div className="w-20 h-20 rounded-full bg-[var(--color-primary)]/10 flex items-center justify-center mb-5">
-            <span className="material-symbols-outlined text-[var(--color-primary)] text-[44px]"
-              style={{ fontVariationSettings: "'FILL' 1" }}>verified_user</span>
-          </div>
-          <h2 className="text-[20px] font-bold text-[var(--color-on-surface)] mb-2">세대 등록 차량입니다</h2>
-          <p className="text-sm text-[var(--color-on-surface-variant)] leading-relaxed max-w-xs">
-            이 차량은 세대 등록 차량으로, 신고 내용이 기록되지 않습니다.
-            번호판을 다시 확인해주세요.
-          </p>
-          <div className="flex gap-3 mt-8 w-full max-w-xs">
-            <button onClick={() => setSubmitState('idle')}
-              className="flex-1 h-12 bg-[var(--color-surface-container-high)] text-[var(--color-on-surface-variant)]
-                rounded-2xl font-semibold active:scale-95 transition-transform">
-              다시 신고
-            </button>
-            <button onClick={() => router.push('/home')}
-              className="flex-[2] h-12 bg-[var(--color-primary)] text-white rounded-2xl font-semibold
-                shadow-lg shadow-[var(--color-primary)]/20 active:scale-95 transition-transform">
-              홈으로
-            </button>
-          </div>
-        </main>
-      </div>
-    );
-  }
 
   if (submitState === 'registered_visitor') {
     return (
@@ -186,7 +163,7 @@ function ReportForm() {
 
       <main className="pt-20 pb-32 px-5 space-y-6">
         <section>
-          <p className="text-sm text-[var(--color-on-surface-variant)]">불법 주차 차량 신고</p>
+          <p className="text-sm text-[var(--color-on-surface-variant)]">주차 민원 접수</p>
           <h2 className="text-[22px] font-bold text-[var(--color-on-surface)] mt-0.5">
             사진과 차량번호를<br />함께 등록해주세요
           </h2>
@@ -244,7 +221,7 @@ function ReportForm() {
                   className="w-full h-12 px-4 pr-12 rounded-xl border-2 border-[var(--color-outline-variant)]
                     bg-[var(--color-surface-container-lowest)] text-[var(--color-on-surface)]
                     plate-mono text-base
-                    placeholder:text-[var(--color-outline)] placeholder:font-normal placeholder:font-[system-ui]
+                    placeholder:text-[var(--color-outline)] placeholder:font-normal
                     focus:border-[var(--color-primary)] focus:outline-none transition-colors"
                 />
                 <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined
@@ -287,7 +264,6 @@ function ReportForm() {
         )}
       </main>
 
-      {/* Sticky submit */}
       {isNight && (
         <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-40
           bg-[var(--color-surface)]/90 backdrop-blur-md border-t border-[var(--color-outline-variant)]/30 pb-safe">

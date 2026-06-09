@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
 import { ok, err, normalizePlate, formatPlate, isNightKST, todayKST } from '@/lib/api';
 import { getRequestUser } from '@/lib/auth';
+import { notifyReport } from '@/lib/telegram';
 
 const PENALTY_BAN_THRESHOLD = parseInt(process.env.NEXT_PUBLIC_PENALTY_LIMIT ?? '10');
 const PENALTY_BAN_DAYS = parseInt(process.env.NEXT_PUBLIC_PENALTY_BAN_DAYS ?? '30');
@@ -10,12 +11,34 @@ export async function POST(req: NextRequest) {
   const user = await getRequestUser(req);
   if (!user) return err('UNAUTHORIZED', '로그인이 필요합니다', 401);
 
-  if (user.role !== 'admin' && !isNightKST()) {
+  const demoMode = process.env.DEMO_MODE === 'true';
+  if (user.role !== 'admin' && !demoMode && !isNightKST()) {
     return err('TIME_RESTRICTED', '신고는 오후 6시~오전 6시에만 가능합니다', 403);
   }
 
-  const body = await req.json();
-  const { plate, memo } = body;
+  // FormData(사진 포함) 또는 JSON 모두 수용
+  const contentType = req.headers.get('content-type') ?? '';
+  let plate: string;
+  let memo: string | null = null;
+  let photoBuffer: Buffer | null = null;
+  let photoMimeType = 'image/jpeg';
+
+  if (contentType.includes('multipart/form-data')) {
+    const fd = await req.formData();
+    plate = (fd.get('plate') as string) ?? '';
+    memo = (fd.get('memo') as string) || null;
+    const photoFile = fd.get('photo') as File | null;
+    if (photoFile && photoFile.size > 0) {
+      const ab = await photoFile.arrayBuffer();
+      photoBuffer = Buffer.from(ab);
+      photoMimeType = photoFile.type || 'image/jpeg';
+    }
+  } else {
+    const body = await req.json();
+    plate = body.plate ?? '';
+    memo = body.memo ?? null;
+  }
+
   if (!plate) return err('INVALID_PLATE', 'plate는 필수입니다', 400);
 
   const plateNorm = normalizePlate(plate);
@@ -51,6 +74,16 @@ export async function POST(req: NextRequest) {
     accounts: { unit_number: string } | null;
   } | undefined;
 
+  // 사진 Supabase Storage 업로드
+  let photoPath: string | null = null;
+  if (photoBuffer) {
+    const fileName = `${today}/${Date.now()}.jpg`;
+    const { data: stored } = await supabase.storage
+      .from('report-photos')
+      .upload(fileName, photoBuffer, { contentType: photoMimeType, upsert: false });
+    photoPath = stored?.path ?? null;
+  }
+
   // 신고 저장
   const { data: report } = await supabase
     .from('reports')
@@ -59,6 +92,7 @@ export async function POST(req: NextRequest) {
       plate_normalized: plateNorm,
       plate_display: plateDisp,
       memo: memo ?? null,
+      photo_path: photoPath,
       target_account_id: targetReg?.account_id ?? null,
       status: 'pending',
     })
@@ -66,23 +100,29 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (!targetReg) {
+    // 미등록 차량 → 텔레그램 알림
+    void notifyReport({
+      plateDisp,
+      kind: 'unknown',
+      reporterUnit: user.unit,
+      memo,
+      photoBuffer,
+    });
     return ok({ kind: 'unknown', report_id: report?.id });
   }
 
   // 방문 등록 차량 → 벌점 부과
-  const { data: penaltyRow } = await supabase
+  await supabase
     .from('penalty_history')
     .insert({
       account_id: targetReg.account_id,
       points: 1,
       type: 'penalty',
-      reason: '야간 미등록 주차 신고',
-      detail: `신고 차량: ${plateDisp} / 신고자: ${user.unit}호`,
+      reason: '방문 차량 야간 주차 민원',
+      detail: `신고 차량: ${plateDisp} / 접수자: ${user.unit}호`,
       imposed_by: user.id,
       report_id: report?.id,
-    })
-    .select()
-    .single();
+    });
 
   // 누적 벌점 갱신
   const { data: acc } = await supabase
@@ -101,6 +141,17 @@ export async function POST(req: NextRequest) {
     .from('accounts')
     .update({ penalty_points: newPoints, ...(banned ? { banned_until: bannedUntil } : {}) })
     .eq('id', targetReg.account_id);
+
+  // 방문 등록 차량 → 텔레그램 알림
+  void notifyReport({
+    plateDisp,
+    kind: 'visitor',
+    unit: targetReg.accounts?.unit_number,
+    reporterUnit: user.unit,
+    memo,
+    penaltyTotal: newPoints,
+    photoBuffer,
+  });
 
   return ok({
     kind: 'visitor',
