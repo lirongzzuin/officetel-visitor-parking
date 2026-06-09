@@ -347,9 +347,7 @@ export default function SettingsPage() {
         <section>
           <p className="text-xs font-bold text-[var(--color-on-surface-variant)] mb-2 px-1">지원</p>
           <div className="bg-[var(--color-surface-container-lowest)] rounded-2xl border border-[var(--color-outline-variant)]/30 overflow-hidden divide-y divide-[var(--color-outline-variant)]/20">
-            <Row icon="menu_book" label="사용자 가이드" onClick={() => show('준비 중입니다.', 'info')} />
-            <Row icon="quiz" label="자주 묻는 질문" onClick={() => show('준비 중입니다.', 'info')} />
-            <Row icon="support_agent" label="고객센터 문의" onClick={() => show(`관리사무소: ${process.env.NEXT_PUBLIC_OFFICE_PHONE ?? '관리사무소'}`, 'info')} />
+            <Row icon="menu_book" label="사용자 가이드" onClick={() => router.push('/guide')} />
           </div>
         </section>
 

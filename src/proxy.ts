@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 const PROTECTED = [
   '/home', '/register', '/lookup', '/report',
-  '/visits', '/penalties', '/settings', '/change-password', '/notices',
+  '/visits', '/penalties', '/settings', '/change-password', '/notices', '/guide',
 ];
 
 export function proxy(request: NextRequest) {
