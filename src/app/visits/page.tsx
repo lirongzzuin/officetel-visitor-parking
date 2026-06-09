@@ -47,7 +47,7 @@ function getDisplayStatus(v: VisitorReg, today: string): 'upcoming' | 'active' |
 
 const STATUS_CONFIG = {
   upcoming: { label: '예정', bg: 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]' },
-  active: { label: '방문중', bg: 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]' },
+  active: { label: '등록', bg: 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]' },
   expired: { label: '만료', bg: 'bg-[var(--color-surface-container-high)] text-[var(--color-on-surface-variant)]' },
   cancelled: { label: '취소', bg: 'bg-[var(--color-error-container)] text-[var(--color-error)]' },
 };

@@ -4,6 +4,56 @@ import { ok, err, normalizePlate, formatPlate, isNightKST, todayKST } from '@/li
 import { getRequestUser } from '@/lib/auth';
 import { notifyReport } from '@/lib/telegram';
 
+export async function GET(req: NextRequest) {
+  const user = await getRequestUser(req);
+  if (!user) return err('UNAUTHORIZED', '로그인이 필요합니다', 401);
+
+  const supabase = createServiceClient();
+  const page = parseInt(req.nextUrl.searchParams.get('page') ?? '1');
+  const limit = 20;
+  const offset = (page - 1) * limit;
+
+  let query = supabase
+    .from('reports')
+    .select(`
+      id, plate_display, memo, status, created_at,
+      reporter:reporter_account_id(unit_number),
+      target:target_account_id(unit_number)
+    `, { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  // 일반 유저는 자기가 신고한 것만
+  if (user.role !== 'admin') {
+    query = query.eq('reporter_account_id', user.id);
+  }
+
+  const { data, error, count } = await query;
+  if (error) return err('NOT_FOUND', '신고 내역을 불러올 수 없습니다', 500);
+
+  type ReportRow = {
+    id: string;
+    plate_display: string;
+    memo: string | null;
+    status: string;
+    created_at: string;
+    reporter: unknown;
+    target: unknown;
+  };
+
+  const reports = (data ?? [] as ReportRow[]).map((r: ReportRow) => ({
+    id: r.id,
+    plate_display: r.plate_display,
+    memo: r.memo,
+    status: r.status,
+    created_at: r.created_at,
+    reporter_unit: (r.reporter as { unit_number: string } | null)?.unit_number ?? null,
+    target_unit: (r.target as { unit_number: string } | null)?.unit_number ?? null,
+  }));
+
+  return ok({ reports, total: count ?? 0 });
+}
+
 const PENALTY_BAN_THRESHOLD = parseInt(process.env.NEXT_PUBLIC_PENALTY_LIMIT ?? '10');
 const PENALTY_BAN_DAYS = parseInt(process.env.NEXT_PUBLIC_PENALTY_BAN_DAYS ?? '30');
 

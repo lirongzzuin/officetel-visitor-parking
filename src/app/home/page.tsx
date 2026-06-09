@@ -207,7 +207,7 @@ export default function HomePage() {
                     <div className="space-y-1.5">
                       <div className="flex items-center gap-2">
                         <span className="bg-[var(--color-primary)]/10 text-[var(--color-primary)]
-                          text-[11px] font-bold px-2 py-0.5 rounded-md">방문중</span>
+                          text-[11px] font-bold px-2 py-0.5 rounded-md">등록</span>
                         <span className="font-bold text-[18px] text-[var(--color-on-surface)] plate-mono">
                           {v.plate_display}
                         </span>
@@ -224,7 +224,7 @@ export default function HomePage() {
                       onClick={() => setCancelId(v.id)}
                       className="text-xs text-[var(--color-error)] border border-[var(--color-error)]/20
                         bg-[var(--color-error)]/5 px-3 py-1.5 rounded-lg font-semibold active:scale-95 transition-transform">
-                      취소
+                      출차
                     </button>
                   </div>
                 </div>

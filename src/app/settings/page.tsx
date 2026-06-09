@@ -51,6 +51,16 @@ function Row({
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
+interface ReportItem {
+  id: string;
+  plate_display: string;
+  memo: string | null;
+  status: string;
+  created_at: string;
+  reporter_unit: string | null;
+  target_unit: string | null;
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
@@ -66,6 +76,9 @@ export default function SettingsPage() {
   const [pwResetUnit, setPwResetUnit] = useState('');
   const [pwResetLoading, setPwResetLoading] = useState(false);
   const [pwResetResult, setPwResetResult] = useState<string | null>(null);
+  const [showReports, setShowReports] = useState(false);
+  const [reports, setReports] = useState<ReportItem[]>([]);
+  const [reportsLoading, setReportsLoading] = useState(false);
 
   useEffect(() => {
     const u = getAuthUnit();
@@ -142,6 +155,15 @@ export default function SettingsPage() {
     }
   }
 
+  async function loadReports() {
+    setReportsLoading(true);
+    try {
+      const data = await apiFetch<{ reports: ReportItem[]; total: number }>('/api/reports');
+      setReports(data.reports);
+    } catch { /* ignore */ }
+    finally { setReportsLoading(false); }
+  }
+
   const themeLabels: Record<ThemeMode, string> = {
     system: '시스템 설정',
     light: '라이트 모드',
@@ -214,6 +236,11 @@ export default function SettingsPage() {
             <Link href="/penalties">
               <Row icon="warning" label="벌점 / 이의제기" />
             </Link>
+            <Row
+              icon="report"
+              label="신고 내역"
+              onClick={() => { setShowReports(true); loadReports(); }}
+            />
             <Row icon="logout" label="로그아웃" danger onClick={() => setShowLogoutConfirm(true)} />
           </div>
         </section>
@@ -334,6 +361,84 @@ export default function SettingsPage() {
       </main>
 
       <BottomNav />
+
+      {/* 신고 내역 시트 */}
+      {showReports && (
+        <>
+          <div className="fixed inset-0 bg-black/50 z-50 backdrop-blur-sm" onClick={() => setShowReports(false)} />
+          <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-50
+            bg-[var(--color-surface)] rounded-t-3xl shadow-2xl max-h-[85dvh] flex flex-col
+            animate-[slideUp_0.25s_ease-out]">
+            <div className="flex-none px-5 pt-4 pb-3 border-b border-[var(--color-outline-variant)]/20">
+              <div className="w-10 h-1.5 bg-[var(--color-outline-variant)]/40 rounded-full mx-auto mb-4" />
+              <div className="flex items-center justify-between">
+                <h3 className="text-[18px] font-bold text-[var(--color-on-surface)]">신고 내역</h3>
+                <button onClick={() => setShowReports(false)}
+                  className="w-8 h-8 flex items-center justify-center rounded-full
+                    bg-[var(--color-surface-container-high)] active:scale-90 transition-transform">
+                  <span className="material-symbols-outlined text-[18px] text-[var(--color-on-surface-variant)]">close</span>
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
+              {reportsLoading ? (
+                <div className="flex justify-center py-12">
+                  <span className="w-6 h-6 border-2 border-[var(--color-primary)]/30 border-t-[var(--color-primary)] rounded-full animate-spin" />
+                </div>
+              ) : reports.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <span className="material-symbols-outlined text-[var(--color-outline)] text-[40px] mb-3">report_off</span>
+                  <p className="text-sm text-[var(--color-on-surface-variant)]">신고 내역이 없습니다</p>
+                </div>
+              ) : (
+                reports.map((r) => {
+                  const statusLabel = r.status === 'resolved' ? '처리완료' : r.status === 'dismissed' ? '기각' : '접수됨';
+                  const statusColor = r.status === 'resolved'
+                    ? 'bg-[var(--color-success)]/10 text-[var(--color-success)]'
+                    : r.status === 'dismissed'
+                    ? 'bg-[var(--color-surface-container-high)] text-[var(--color-on-surface-variant)]'
+                    : 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]';
+                  const d = new Date(r.created_at);
+                  const dateStr = d.toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' });
+                  const timeStr = d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+                  return (
+                    <div key={r.id}
+                      className="bg-[var(--color-surface-container-lowest)] rounded-2xl p-4
+                        border border-[var(--color-outline-variant)]/30 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-[16px] text-[var(--color-on-surface)] plate-mono">
+                          {r.plate_display}
+                        </span>
+                        <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${statusColor}`}>
+                          {statusLabel}
+                        </span>
+                      </div>
+                      {r.memo && (
+                        <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed">{r.memo}</p>
+                      )}
+                      <div className="flex items-center justify-between text-[11px] text-[var(--color-outline)]">
+                        <span>
+                          {role === 'admin' && r.reporter_unit ? `신고자: ${r.reporter_unit}호` : ''}
+                          {role === 'admin' && r.target_unit ? `  →  ${r.target_unit}호` : ''}
+                          {role !== 'admin' ? (r.target_unit ? `대상: ${r.target_unit}호` : '미등록 차량') : ''}
+                        </span>
+                        <span>{dateStr} {timeStr}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div className="flex-none px-5 pb-8 pt-3 border-t border-[var(--color-outline-variant)]/20">
+              <button onClick={() => setShowReports(false)}
+                className="w-full h-12 rounded-2xl bg-[var(--color-surface-container-high)]
+                  text-[var(--color-on-surface-variant)] font-semibold active:scale-95 transition-transform">
+                닫기
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* 로그아웃 확인 시트 */}
       {showLogoutConfirm && (
