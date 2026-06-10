@@ -6,6 +6,7 @@ on:
     paths:
       - 'agent/**'
       - '.github/workflows/build_agent.yml'
+      - '.github/workflows/build_probe.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -76,6 +77,22 @@ jobs:
           $size = (Get-Item $exe).Length / 1MB
           echo "EXE size: $([math]::Round($size,1)) MB"
 
+      - name: Build cartan_probe EXE (DB 탐침 도구)
+        shell: pwsh
+        run: |
+          Push-Location diagnostic
+          pyinstaller `
+            --onefile `
+            --name cartan_probe `
+            --console `
+            --clean `
+            probe.py
+          Pop-Location
+          if (-not (Test-Path "diagnostic\dist\cartan_probe.exe")) {
+            throw "cartan_probe.exe 빌드 실패"
+          }
+          echo "cartan_probe.exe 빌드 성공"
+
       - name: Package installer zip
         shell: pwsh
         run: |
@@ -83,6 +100,7 @@ jobs:
           New-Item -ItemType Directory -Path $zip_dir -Force | Out-Null
 
           Copy-Item "dist\officetel_agent.exe"              "$zip_dir\"
+          Copy-Item "diagnostic\dist\cartan_probe.exe"      "$zip_dir\"
           Copy-Item "installer\install.bat"                 "$zip_dir\"
           Copy-Item "installer\uninstall.bat"               "$zip_dir\"
           Copy-Item "installer\config.json.example"         "$zip_dir\"
@@ -94,7 +112,7 @@ jobs:
           Copy-Item $nssm_src "$zip_dir\nssm.exe"
 
           Compress-Archive -Path "$zip_dir\*" -DestinationPath "officetel_agent_installer.zip" -Force
-          echo "패키지 생성 완료"
+          echo "패키지 생성 완료 (cartan_probe.exe 포함)"
 
       - name: Upload artifact (임시 보관)
         uses: actions/upload-artifact@v4
@@ -123,4 +141,5 @@ jobs:
             - 서버에서 `update` 명령을 전송하면 즉시 적용됩니다.
           files: |
             agent/dist/officetel_agent.exe
+            agent/diagnostic/dist/cartan_probe.exe
             agent/officetel_agent_installer.zip
