@@ -54,7 +54,7 @@ class HeartbeatPayload:
 
 def send_heartbeat(
     cartan_ok: bool,
-    camera_ok: bool = False,
+    camera_ok: bool = True,  # 카메라 미사용 환경 — 기본 True (오탐 방지)
     last_sync: Optional[datetime] = None,
     queue_processed: int = 0,
     error_count: int = 0,
