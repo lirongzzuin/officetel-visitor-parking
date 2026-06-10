@@ -7,6 +7,7 @@
   "CARTAN_SCENARIO":      "S2",
   "CARTAN_DRY_RUN":       "true",
   "CARTAN_DB_PATH":       "C:\\Program Files (x86)\\TANTANCore\\CARTAN800\\bin\\ANPRDATA.mdb",
+  "CARTAN_DB_PASSWORD":   "여기에_DB_비밀번호_입력_또는_빈문자열",
   "CARTAN_VISITOR_TABLE": "tVisitor",
   "CARTAN_PLATE_COL":     "carno",
   "CARTAN_UNIT_COL":      "dong",

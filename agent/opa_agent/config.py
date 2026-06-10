@@ -33,6 +33,7 @@ UPDATE_CHECK_SEC     = lambda: int(get("UPDATE_CHECK_SEC", "3600"))
 CARTAN_SCENARIO      = lambda: get("CARTAN_SCENARIO", "S1")
 CARTAN_DRY_RUN       = lambda: get("CARTAN_DRY_RUN", "true").lower() == "true"
 CARTAN_DB_PATH       = lambda: get("CARTAN_DB_PATH", "")
+CARTAN_DB_PASSWORD   = lambda: get("CARTAN_DB_PASSWORD", "")  # 비밀번호 보호된 .mdb 대응
 CARTAN_VISITOR_TABLE = lambda: get("CARTAN_VISITOR_TABLE", "")
 CARTAN_PLATE_COL     = lambda: get("CARTAN_PLATE_COL", "")
 CARTAN_UNIT_COL      = lambda: get("CARTAN_UNIT_COL", "")

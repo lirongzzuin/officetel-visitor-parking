@@ -248,7 +248,7 @@ def section_registry() -> list[str]:
     return found_paths
 
 
-_CONFIG_EXTS = {".ini", ".json", ".xml", ".cfg", ".conf", ".toml"}
+_CONFIG_EXTS = {".ini", ".json", ".xml", ".cfg", ".conf", ".toml", ".config", ".properties"}
 _DB_EXTS     = {".db", ".sqlite", ".sqlite3", ".s3db", ".mdb", ".accdb"}
 _SKIP_DIRS   = {
     "windows", "winsxs", "system32", "syswow64",
@@ -454,8 +454,11 @@ def section_sqlite_schema(all_dbs: list[Path]) -> list[Path]:
     return parking_dbs
 
 
+_found_passwords: dict[str, str] = {}  # db_path → password
+
+
 def section_access_schema(all_dbs: list[Path]) -> list[Path]:
-    """ODBC + OLE DB 두 방식, 32/64-bit PS 모두 시도해서 .mdb 스키마 읽기 (v2.5)"""
+    """ODBC + OLE DB 두 방식, 32/64-bit PS 모두 시도해서 .mdb 스키마 읽기 (v2.6)"""
     parking_dbs: list[Path] = []
     try:
         log("")
@@ -504,17 +507,26 @@ def section_access_schema(all_dbs: list[Path]) -> list[Path]:
               "dong", "intime", "outtime", "unit", "ho", "valid", "anpr"]
 
         # ── ODBC 방식 스크립트 (System.Data.Odbc — OLE DB와 완전히 다른 드라이버) ──
+        # 'Not a valid password' 오류 시 일반적인 Cartan 비밀번호 후보로 자동 재시도
         ps_odbc = r"""
 $db = '{db_path}'
 $drivers = @(
   'Microsoft Access Driver (*.mdb, *.accdb)',
   'Microsoft Access Driver (*.mdb)'
 )
+# 보수적으로 3개만 시도 — 1차는 빈 비밀번호, 2~3차는 가장 유력한 후보 (시스템 락아웃 위험 차단)
+$passwords = @('', 'cartan', 'tantan')
+# 시도 간 대기 — 빠른 연속 시도로 인한 의도치 않은 부작용 방지
+$sleepBetween = 1.0
 foreach ($drv in $drivers) {{
+ foreach ($pwd in $passwords) {{
   try {{
-    $cs = "Driver={{$drv}};DBQ=$db;ReadOnly=1;"
+    Start-Sleep -Seconds $sleepBetween
+    $pwdPart = if ($pwd -ne '') {{ "PWD=$pwd;" }} else {{ '' }}
+    $cs = "Driver={{$drv}};DBQ=$db;${{pwdPart}}ReadOnly=1;"
     $conn = New-Object System.Data.Odbc.OdbcConnection($cs)
     $conn.Open()
+    if ($pwd -ne '') {{ Write-Host "PASSWORD_FOUND:$pwd" }}
     Write-Host "PROVIDER_OK:ODBC/$drv"
     $schema = $conn.GetSchema('Tables')
     $tnames = @()
@@ -540,19 +552,35 @@ foreach ($drv in $drivers) {{
     }}
     $conn.Close()
     exit 0
-  }} catch {{ Write-Host "PROV_FAIL:ODBC/$drv $_" }}
+  }} catch {{
+    $err = $_.Exception.Message
+    if ($err -notlike '*password*' -and $err -notlike '*Password*') {{
+      Write-Host "PROV_FAIL:ODBC/$drv $err"
+      break  # 비밀번호 외 다른 오류면 다음 비밀번호 시도 무의미
+    }}
+  }}
+ }}
 }}
 Write-Host "ALL_PROVIDERS_FAILED"
 """
 
         # ── OLE DB 방식 스크립트 (ADODB COM 자동화) ─────────────────────
+        # 'Not a valid password' 오류 시 일반적인 Cartan 비밀번호 후보로 자동 재시도
         ps_oledb = r"""
 $db = '{db_path}'
 $providers = @('Microsoft.ACE.OLEDB.12.0', 'Microsoft.Jet.OLEDB.4.0')
+# 보수적으로 3개만 시도 — 1차는 빈 비밀번호, 2~3차는 가장 유력한 후보 (시스템 락아웃 위험 차단)
+$passwords = @('', 'cartan', 'tantan')
+# 시도 간 대기 — 빠른 연속 시도로 인한 의도치 않은 부작용 방지
+$sleepBetween = 1.0
 foreach ($prov in $providers) {{
+ foreach ($pwd in $passwords) {{
   try {{
+    Start-Sleep -Seconds $sleepBetween
     $conn = New-Object -ComObject ADODB.Connection
-    $conn.Open("Provider=$prov;Data Source=$db;Mode=Read;")
+    $pwdPart = if ($pwd -ne '') {{ ";Jet OLEDB:Database Password=$pwd" }} else {{ '' }}
+    $conn.Open("Provider=$prov;Data Source=$db;Mode=Read${{pwdPart}};")
+    if ($pwd -ne '') {{ Write-Host "PASSWORD_FOUND:$pwd" }}
     Write-Host "PROVIDER_OK:OLEDB/$prov"
     $sc = $conn.OpenSchema(20)
     $tnames = @()
@@ -579,7 +607,14 @@ foreach ($prov in $providers) {{
     }}
     $conn.Close()
     exit 0
-  }} catch {{ Write-Host "PROV_FAIL:OLEDB/$prov $_" }}
+  }} catch {{
+    $err = $_.Exception.Message
+    if ($err -notlike '*password*' -and $err -notlike '*Password*') {{
+      Write-Host "PROV_FAIL:OLEDB/$prov $err"
+      break
+    }}
+  }}
+ }}
 }}
 Write-Host "ALL_PROVIDERS_FAILED"
 """
@@ -616,7 +651,11 @@ Write-Host "ALL_PROVIDERS_FAILED"
                         log(f"  │  [사용 방식: {method} / {bits}]")
                         col_names: list[str] = []
                         for line in out.splitlines():
-                            if line.startswith("PROVIDER_OK:"):
+                            if line.startswith("PASSWORD_FOUND:"):
+                                pwd = line.split(":", 1)[1]
+                                _found_passwords[str(path)] = pwd
+                                log(f"  │  🔑  비밀번호 발견: '{pwd}'")
+                            elif line.startswith("PROVIDER_OK:"):
                                 log(f"  │  ✅  드라이버: {line.split(':', 1)[1]}")
                             elif line.startswith("TABLES:"):
                                 tables = [t for t in line.split(":", 1)[1].split(",") if t]
@@ -825,29 +864,65 @@ def section_summary(all_dbs: list[Path], parking_dbs: list[Path]) -> None:
             for p in parking_dbs:
                 log(f"    {p}")
 
-        # DB 확장자로 CARTAN_SCENARIO 자동 추천
+        # CARTAN_SCENARIO 자동 추천
+        # 우선순위 1) 경로에 Cartan/TANTAN 포함된 DB
+        # 우선순위 2) 스키마 분석으로 주차 관련으로 판정된 DB
+        # 우선순위 3) 전체 DB에서 확장자만으로
         log("")
         log("  ─────────────────────────────────────────────────────")
         log("  CARTAN_SCENARIO 추천")
         log("  ─────────────────────────────────────────────────────")
         sqlite_exts = {".db", ".sqlite", ".sqlite3", ".s3db"}
         access_exts = {".mdb", ".accdb"}
-        has_sqlite = any(p.suffix.lower() in sqlite_exts for p in parking_dbs)
-        has_access = any(p.suffix.lower() in access_exts for p in parking_dbs)
 
-        if has_access:
-            log('  → CARTAN_SCENARIO = "S2"  (.mdb/.accdb 발견 — Access 어댑터)')
-        elif has_sqlite:
-            log('  → CARTAN_SCENARIO = "S1"  (.db/.sqlite 발견 — SQLite 어댑터)')
+        # 경로에 Cartan/TANTAN/CARTAN800 포함된 DB만 추출 — 가장 신뢰 가능
+        path_kw = ["cartan", "tantan", "anprdata", "anprpark"]
+        cartan_path_dbs = [
+            p for p in all_dbs
+            if any(kw in str(p).lower() for kw in path_kw)
+        ]
+
+        recommended_db: Path | None = None
+        scenario: str | None = None
+        reason: str = ""
+
+        if cartan_path_dbs:
+            # 경로 우선 — visitor/방문 관련 키워드 우선
+            preferred = [p for p in cartan_path_dbs if "anprdata" in str(p).lower()]
+            recommended_db = preferred[0] if preferred else cartan_path_dbs[0]
+            ext = recommended_db.suffix.lower()
+            if ext in access_exts:
+                scenario = "S2"
+                reason = "Cartan 설치 경로의 .mdb 파일 발견"
+            elif ext in sqlite_exts:
+                scenario = "S1"
+                reason = "Cartan 설치 경로의 .db 파일 발견"
+        elif parking_dbs:
+            # 스키마 분석에 의존
+            has_sqlite = any(p.suffix.lower() in sqlite_exts for p in parking_dbs)
+            has_access = any(p.suffix.lower() in access_exts for p in parking_dbs)
+            if has_access:
+                recommended_db = next(p for p in parking_dbs if p.suffix.lower() in access_exts)
+                scenario = "S2"
+                reason = "스키마에서 주차 관련 테이블 발견 (.mdb)"
+            elif has_sqlite:
+                recommended_db = next(p for p in parking_dbs if p.suffix.lower() in sqlite_exts)
+                scenario = "S1"
+                reason = "스키마에서 주차 관련 테이블 발견 (.db) — 무관 DB 가능성 확인 필요"
+
+        if scenario and recommended_db:
+            log(f'  → CARTAN_SCENARIO = "{scenario}"  ({reason})')
+            log(f'  → CARTAN_DB_PATH  = "{recommended_db}"')
+            log(f'                       (config.json 에는 역슬래시 \\\\ 두 번)')
+            pwd = _found_passwords.get(str(recommended_db))
+            if pwd is not None:
+                log(f'  → CARTAN_DB_PASSWORD = "{pwd}"  (자동 발견)')
+            elif scenario == "S2":
+                log('  → CARTAN_DB_PASSWORD = ""    (자동 발견 실패 — 수동 확인 필요)')
+                log('                              [4/9] CarTan.exe.config 또는 벤더 문의')
         elif all_dbs:
-            has_sqlite_all = any(p.suffix.lower() in sqlite_exts for p in all_dbs)
-            has_access_all = any(p.suffix.lower() in access_exts for p in all_dbs)
-            if has_access_all:
-                log('  → CARTAN_SCENARIO = "S2"  (.mdb 발견 — 주차 테이블 확인 필요)')
-            elif has_sqlite_all:
-                log('  → CARTAN_SCENARIO = "S1"  (.db 발견 — 주차 테이블 확인 필요)')
-            else:
-                log("  → 판단 불가 — 보고서 [6/9] 또는 [6b/9]에서 수동 확인")
+            log("  → 판단 불가 — Cartan/TANTAN 경로의 DB가 발견되지 않음")
+            log("    [4/9] 설치 폴더 탐색 결과 수동 확인 필요")
         else:
             log("  → DB 파일 없음 — Cartan 실행 중인지 확인 필요")
 
@@ -857,6 +932,9 @@ def section_summary(all_dbs: list[Path], parking_dbs: list[Path]) -> None:
         log("  ─────────────────────────────────────────────────────")
         log("  □ CARTAN_SCENARIO       → 위 추천값 참고 (S1 또는 S2)")
         log("  □ CARTAN_DB_PATH        → DB 파일 전체 경로")
+        log("  □ CARTAN_DB_PASSWORD    → .mdb가 비밀번호 보호되면 입력, 아니면 \"\" 빈 문자열")
+        log("                            ([6b/9] 에서 'Not a valid password' 오류 시 필요)")
+        log("                            CarTan.exe.config (또는 [4/9]) 에서 ConnectionString 확인")
         log("  □ CARTAN_VISITOR_TABLE  → ★ 표시 테이블명")
         log("  □ CARTAN_PLATE_COL      → 차량번호 컬럼명")
         log("  □ CARTAN_UNIT_COL       → 동/호수 컬럼명")
