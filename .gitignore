@@ -21,11 +21,8 @@
 # Environment variables — NEVER commit these
 # ========================
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-# .env.example is safe to commit (no secrets, only key names)
+.env.*
+!.env.example
 
 # ========================
 # Testing & coverage
@@ -70,3 +67,30 @@ next-env.d.ts
 *.pem
 .cache
 tmp/
+
+# ========================
+# Secrets / keys
+# ========================
+*.key
+*.p12
+
+# ========================
+# Agent (Python / PyInstaller) & field data
+# ========================
+__pycache__/
+*.pyc
+.venv/
+agent/dist/
+agent/build/
+*.spec
+agent/installer/config.json
+agent/installer/nssm.exe
+*.exe
+*.zip
+*.mdb
+*.accdb
+*.ldb
+*.db
+*.sqlite
+cartan_probe_*.txt
+.claude/

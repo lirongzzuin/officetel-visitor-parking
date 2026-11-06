@@ -29,6 +29,7 @@ const supabase = createClient(SUPABASE_URL, SERVICE_KEY, {
 });
 
 // ── 호수 목록 생성 ─────────────────────────────────────────
+// 예시 구성(2~10층, 층당 5세대)입니다. 실제 건물 구조에 맞게 바꿔서 사용하세요.
 function getUnits() {
   const units = [];
   for (let floor = 2; floor <= 10; floor++) {
